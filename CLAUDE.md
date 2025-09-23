@@ -14,16 +14,19 @@ pip install -r requirements.txt
 pip freeze > requirements.txt
 ```
 
-### Code Quality (Future Setup)
+### Code Quality
 ```bash
-# Format code (when black is installed)
+# Format code
 black .
+
+# Sort imports
+isort .
+
+# Run both formatting commands
+isort . && black .
 
 # Lint code (when flake8 is installed)
 flake8 .
-
-# Sort imports (when isort is installed)
-isort .
 
 # Type check (when mypy is installed)
 mypy nikune/
@@ -43,6 +46,7 @@ pytest --cov=nikune
 - This project uses Python virtual environment (`venv/`)
 - Twitter API credentials should be stored in `.env` file
 - Main dependencies: tweepy, schedule, requests, python-dotenv
+- Development tools: black, isort (for code formatting)
 
 ## Project Structure
 

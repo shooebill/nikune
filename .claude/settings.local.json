@@ -9,7 +9,14 @@
       "mcp__serena__search_for_pattern",
       "mcp__serena__find_file",
       "mcp__serena__write_memory",
-      "mcp__openmemory-local__search_memory"
+      "mcp__openmemory-local__search_memory",
+      "mcp__openmemory-local__add_memories",
+      "Bash(isort:*)",
+      "Bash(black:*)",
+      "Bash(flake8:*)",
+      "Bash(mypy:*)",
+      "Bash(python:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
