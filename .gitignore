@@ -3,3 +3,14 @@
 venv/
 __pycache__/
 *.pyc
+
+# IDE and development tools
+.claude/
+.serena/
+.vscode/
+.idea/
+
+# Data files (optional - uncomment if you don't want to track data)
+# data/
+# *.db
+# *.csv
