@@ -16,7 +16,8 @@
       "Bash(flake8:*)",
       "Bash(mypy:*)",
       "Bash(python:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
