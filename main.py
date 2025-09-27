@@ -107,30 +107,55 @@ def test_all_components() -> bool:
         return False
 
 
-def post_now_command(category: Optional[str] = None, tone: Optional[str] = None, text: Optional[str] = None) -> bool:
+def post_now_command(
+    category: Optional[str] = None, tone: Optional[str] = None, text: Optional[str] = None, dry_run: bool = False
+) -> bool:
     """即座に1回ツイート投稿"""
-    print(f"🐻 {BOT_NAME} - Posting tweet now...")
+    if dry_run:
+        print(f"🐻 {BOT_NAME} - Dry run mode (no actual posting)")
+    else:
+        print(f"🐻 {BOT_NAME} - Posting tweet now...")
 
     try:
         with SchedulerManager() as scheduler:
             # カスタムテキストが指定された場合
             if text:
                 print(f"📝 Custom tweet: {text}")
-                success = scheduler.post_custom_tweet(text)
+                if dry_run:
+                    print("🔍 [DRY RUN] Would post this custom tweet")
+                    return True
+                else:
+                    success = scheduler.post_custom_tweet(text)
             else:
                 # サンプルデータがない場合はセットアップ
                 if not setup_sample_data(scheduler.db_manager):
                     print("❌ Failed to setup sample data")
                     return False
 
-                # 通常の投稿（テンプレートから生成）
-                success = scheduler.post_now(category=category, tone=tone)
+                if dry_run:
+                    # ドライランモード: コンテンツ生成のみ
+                    content = scheduler.content_generator.generate_tweet_content(category, tone)
+                    if content:
+                        print(f"🔍 [DRY RUN] Would post: {content}")
+                        return True
+                    else:
+                        print("❌ [DRY RUN] Failed to generate content")
+                        return False
+                else:
+                    # 通常の投稿（テンプレートから生成）
+                    success = scheduler.post_now(category=category, tone=tone)
 
             if success:
-                print("🎉 Tweet posted successfully!")
+                if dry_run:
+                    print("✅ [DRY RUN] Content generation successful!")
+                else:
+                    print("🎉 Tweet posted successfully!")
                 return True
             else:
-                print("❌ Failed to post tweet")
+                if dry_run:
+                    print("❌ [DRY RUN] Content generation failed")
+                else:
+                    print("❌ Failed to post tweet")
                 return False
 
     except Exception as e:
@@ -285,8 +310,10 @@ def main() -> None:
 使用例:
   python main.py --test                    # 全コンポーネントテスト
   python main.py --post-now                # 即座に1回投稿
+  python main.py --post-now --dry-run      # ドライランモード（投稿せず内容のみ表示）
   python main.py --post-now --category お肉 # カテゴリ指定で投稿
   python main.py --post-now --text "こんにちは！" # カスタムテキストで投稿
+  python main.py --post-now --text "テスト" --dry-run # カスタムテキストのドライラン
   python main.py --schedule                # スケジューラー開始
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
   python main.py --setup-db --file data/custom.tsv # 指定ファイルからインポート
@@ -306,6 +333,7 @@ def main() -> None:
     parser.add_argument("--text", type=str, help="カスタムツイート内容（--post-now用）")
     parser.add_argument("--file", type=str, help="テンプレートファイルパス（--setup-db用、TSV形式）")
     parser.add_argument("--config", type=str, help="設定ファイルパス（--schedule用）")
+    parser.add_argument("--dry-run", action="store_true", help="実際の投稿は行わず、内容のみ表示（--post-now用）")
     parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログを出力")
 
     args = parser.parse_args()
@@ -323,7 +351,7 @@ def main() -> None:
         if args.test:
             success = test_all_components()
         elif args.post_now:
-            success = post_now_command(category=args.category, tone=args.tone, text=args.text)
+            success = post_now_command(category=args.category, tone=args.tone, text=args.text, dry_run=args.dry_run)
         elif args.schedule:
             success = start_scheduler_command(config_file=args.config)
         elif args.setup_db:

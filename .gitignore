@@ -13,6 +13,9 @@ __pycache__/
 ehthumbs.db
 Thumbs.db
 
+# 開発ツール
+check_code.sh
+
 # IDE and development tools
 .claude/
 .serena/
