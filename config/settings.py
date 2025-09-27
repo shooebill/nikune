@@ -28,7 +28,7 @@ ACTIVE_HOURS_END = 21  # 21時まで
 
 
 # 設定の検証
-def validate_config():
+def validate_config() -> bool:
     """必要な設定がすべて揃っているかチェック"""
     required_vars = [
         TWITTER_API_KEY,

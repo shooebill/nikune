@@ -4,13 +4,30 @@ venv/
 __pycache__/
 *.pyc
 
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
 # IDE and development tools
 .claude/
 .serena/
 .vscode/
 .idea/
+.flake8
+pyproject.toml
 
-# Data files (optional - uncomment if you don't want to track data)
-# data/
-# *.db
-# *.csv
+# Data files - 実データは除外、サンプルデータのみ保持
+data/templates.db
+data/tweet_templates.tsv
+data/tweet_templates.generated.tsv
+data/exported_templates.tsv
+
+# サンプルデータとマスタデータは保持
+!data/sample_templates.tsv
+!data/category.tsv
+!data/tone.tsv

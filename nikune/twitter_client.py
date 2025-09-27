@@ -7,13 +7,9 @@ import logging
 
 import tweepy
 
-from config.settings import (
-    BOT_NAME,
-    TWITTER_ACCESS_TOKEN,
-    TWITTER_ACCESS_TOKEN_SECRET,
-    TWITTER_API_KEY,
-    TWITTER_API_SECRET,
-)
+from config.settings import (BOT_NAME, TWITTER_ACCESS_TOKEN,
+                             TWITTER_ACCESS_TOKEN_SECRET, TWITTER_API_KEY,
+                             TWITTER_API_SECRET)
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -23,13 +19,13 @@ logger = logging.getLogger(__name__)
 class TwitterClient:
     """Twitter API クライアント"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Twitter APIクライアントを初期化"""
         self.client = None
         self.api = None
         self._setup_client()
 
-    def _setup_client(self):
+    def _setup_client(self) -> None:
         """Twitter APIクライアントをセットアップ"""
         try:
             # Twitter API v2 クライアント（ツイート投稿用）
@@ -56,9 +52,13 @@ class TwitterClient:
             logger.error(f"❌ Twitter client initialization failed: {e}")
             raise
 
-    def test_connection(self):
+    def test_connection(self) -> bool:
         """API接続テスト"""
         try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return False
+
             # 自分のユーザー情報を取得してテスト
             me = self.client.get_me()
             logger.info(f"✅ Connection test successful! Account: @{me.data.username}")
@@ -68,9 +68,13 @@ class TwitterClient:
             logger.error(f"❌ Connection test failed: {e}")
             return False
 
-    def post_tweet(self, text):
+    def post_tweet(self, text: str) -> bool:
         """ツイートを投稿"""
         try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return False
+
             # 文字数チェック（280文字制限）
             if len(text) > 280:
                 logger.warning(f"Tweet too long ({len(text)} chars), truncating...")
@@ -83,15 +87,19 @@ class TwitterClient:
             logger.info(f"✅ Tweet posted successfully! ID: {tweet_id}")
             logger.info(f"📝 Content: {text}")
 
-            return tweet_id
+            return True
 
         except Exception as e:
             logger.error(f"❌ Failed to post tweet: {e}")
-            return None
+            return False
 
-    def retweet(self, tweet_id):
+    def retweet(self, tweet_id: str) -> bool:
         """指定されたツイートをリツイート"""
         try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return False
+
             self.client.retweet(tweet_id)
             logger.info(f"✅ Retweeted successfully! Tweet ID: {tweet_id}")
             return True
@@ -100,9 +108,13 @@ class TwitterClient:
             logger.error(f"❌ Failed to retweet: {e}")
             return False
 
-    def like_tweet(self, tweet_id):
+    def like_tweet(self, tweet_id: str) -> bool:
         """指定されたツイートをいいね"""
         try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return False
+
             self.client.like(tweet_id)
             logger.info(f"✅ Liked successfully! Tweet ID: {tweet_id}")
             return True
@@ -113,7 +125,7 @@ class TwitterClient:
 
 
 # テスト用関数
-def test_twitter_client():
+def test_twitter_client() -> None:
     """Twitter クライアントのテスト実行"""
     print(f"🐻 {BOT_NAME} Twitter client test starting...")
 
