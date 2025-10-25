@@ -93,7 +93,12 @@ def test_all_components() -> bool:
         print("\n4. Testing Scheduler...")
         with SchedulerManager() as scheduler:
             # テスト用スケジュール設定
-            test_config = {"daily_posts": 1, "post_times": ["12:00"], "categories": ["お肉"], "random_delay": False}
+            test_config = {
+                "daily_posts": 1,
+                "post_times": ["12:00"],
+                "categories": ["お肉"],
+                "random_delay": False,
+            }
             scheduler.setup_schedule(test_config)
 
             status = scheduler.get_schedule_status()
@@ -108,7 +113,10 @@ def test_all_components() -> bool:
 
 
 def post_now_command(
-    category: Optional[str] = None, tone: Optional[str] = None, text: Optional[str] = None, dry_run: bool = False
+    category: Optional[str] = None,
+    tone: Optional[str] = None,
+    text: Optional[str] = None,
+    dry_run: bool = False,
 ) -> bool:
     """即座に1回ツイート投稿"""
     if dry_run:
@@ -333,7 +341,11 @@ def main() -> None:
     parser.add_argument("--text", type=str, help="カスタムツイート内容（--post-now用）")
     parser.add_argument("--file", type=str, help="テンプレートファイルパス（--setup-db用、TSV形式）")
     parser.add_argument("--config", type=str, help="設定ファイルパス（--schedule用）")
-    parser.add_argument("--dry-run", action="store_true", help="実際の投稿は行わず、内容のみ表示（--post-now用）")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="実際の投稿は行わず、内容のみ表示（--post-now用）",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログを出力")
 
     args = parser.parse_args()
@@ -351,7 +363,12 @@ def main() -> None:
         if args.test:
             success = test_all_components()
         elif args.post_now:
-            success = post_now_command(category=args.category, tone=args.tone, text=args.text, dry_run=args.dry_run)
+            success = post_now_command(
+                category=args.category,
+                tone=args.tone,
+                text=args.text,
+                dry_run=args.dry_run,
+            )
         elif args.schedule:
             success = start_scheduler_command(config_file=args.config)
         elif args.setup_db:

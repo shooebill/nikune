@@ -34,3 +34,19 @@ data/exported_templates.tsv
 !data/sample_templates.tsv
 !data/category.tsv
 !data/tone.tsv
+
+# 追加の開発環境ファイル
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+logs/
+
+# uv特有のファイル（Mac環境との互換性のため）
+uv.lock

@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """データベース管理クラス（SQLite + Redis）"""
 
-    def __init__(self, sqlite_path: str = "data/templates.db", redis_host: str = "localhost", redis_port: int = 6379):
+    def __init__(
+        self,
+        sqlite_path: str = "data/templates.db",
+        redis_host: str = "localhost",
+        redis_port: int = 6379,
+    ):
         """
         データベースマネージャーを初期化
 
@@ -34,6 +39,7 @@ class DatabaseManager:
         self.sqlite_path = sqlite_path
         self.redis_host = redis_host
         self.redis_port = redis_port
+        self._closed = False  # クローズ状態フラグ
 
         # データディレクトリを作成
         os.makedirs(os.path.dirname(sqlite_path), exist_ok=True)
@@ -117,7 +123,10 @@ class DatabaseManager:
         return template_id
 
     def get_templates(
-        self, category: Optional[str] = None, tone: Optional[str] = None, active_only: bool = True
+        self,
+        category: Optional[str] = None,
+        tone: Optional[str] = None,
+        active_only: bool = True,
     ) -> List[Dict[str, str]]:
         """
         テンプレートを取得
@@ -258,10 +267,17 @@ class DatabaseManager:
 
         except Exception as e:
             logger.error(f"❌ Failed to get usage stats: {e}")
-            return {"template_id": str(template_id), "usage_count": "0", "error": str(e)}
+            return {
+                "template_id": str(template_id),
+                "usage_count": "0",
+                "error": str(e),
+            }
 
     def get_available_template(
-        self, category: Optional[str] = None, tone: Optional[str] = None, max_attempts: int = 10
+        self,
+        category: Optional[str] = None,
+        tone: Optional[str] = None,
+        max_attempts: int = 10,
     ) -> Optional[Dict[str, str]]:
         """
         使用可能なテンプレートを取得（重複防止付き）
@@ -380,7 +396,14 @@ class DatabaseManager:
 
             # TSVファイルに書き込み
             with open(tsv_file_path, "w", newline="", encoding="utf-8") as tsvfile:
-                fieldnames = ["id", "category", "tone", "template", "created_at", "is_active"]
+                fieldnames = [
+                    "id",
+                    "category",
+                    "tone",
+                    "template",
+                    "created_at",
+                    "is_active",
+                ]
                 writer = csv.DictWriter(tsvfile, fieldnames=fieldnames, delimiter="\t")
 
                 writer.writeheader()
@@ -399,10 +422,15 @@ class DatabaseManager:
     def close(self) -> None:
         """データベース接続を閉じる"""
         try:
-            if hasattr(self, "sqlite_conn"):
+            if hasattr(self, "_closed") and self._closed:
+                return  # 既にクローズ済み
+
+            if hasattr(self, "sqlite_conn") and self.sqlite_conn:
                 self.sqlite_conn.close()
-            if hasattr(self, "redis_client"):
+            if hasattr(self, "redis_client") and self.redis_client:
                 self.redis_client.close()  # type: ignore
+
+            self._closed = True
             logger.info("✅ Database connections closed")
         except Exception as e:
             logger.error(f"❌ Error closing database connections: {e}")
