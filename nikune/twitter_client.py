@@ -7,9 +7,13 @@ import logging
 
 import tweepy
 
-from config.settings import (BOT_NAME, TWITTER_ACCESS_TOKEN,
-                             TWITTER_ACCESS_TOKEN_SECRET, TWITTER_API_KEY,
-                             TWITTER_API_SECRET)
+from config.settings import (
+    BOT_NAME,
+    TWITTER_ACCESS_TOKEN,
+    TWITTER_ACCESS_TOKEN_SECRET,
+    TWITTER_API_KEY,
+    TWITTER_API_SECRET,
+)
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)

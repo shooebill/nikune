@@ -198,22 +198,40 @@ class ContentGenerator:
         """サンプルテンプレートを追加（テスト用）"""
         try:
             sample_templates = [
-                {"category": "お肉", "tone": "可愛い", "template": "🐻 {greeting}！今日のお肉は最高だよ〜 {emoji}"},
-                {"category": "お肉", "tone": "元気", "template": "🍖 お肉パワーで今日も頑張るぞ！{time}だよ〜"},
+                {
+                    "category": "お肉",
+                    "tone": "可愛い",
+                    "template": "🐻 {greeting}！今日のお肉は最高だよ〜 {emoji}",
+                },
+                {
+                    "category": "お肉",
+                    "tone": "元気",
+                    "template": "🍖 お肉パワーで今日も頑張るぞ！{time}だよ〜",
+                },
                 {
                     "category": "お肉",
                     "tone": "癒し",
                     "template": "🥩 お肉を食べると心が温かくなるね {emoji} {greeting}",
                 },
-                {"category": "日常", "tone": "可愛い", "template": "🐻 {greeting}！今日も{emoji}で頑張ろうね"},
-                {"category": "季節", "tone": "元気", "template": "✨ {weather}の日はお肉が美味しいね！{time}だよ〜"},
+                {
+                    "category": "日常",
+                    "tone": "可愛い",
+                    "template": "🐻 {greeting}！今日も{emoji}で頑張ろうね",
+                },
+                {
+                    "category": "季節",
+                    "tone": "元気",
+                    "template": "✨ {weather}の日はお肉が美味しいね！{time}だよ〜",
+                },
             ]
 
             added_count = 0
             for template_data in sample_templates:
                 try:
                     template_id = self.db_manager.add_template(
-                        template_data["category"], template_data["tone"], template_data["template"]
+                        template_data["category"],
+                        template_data["tone"],
+                        template_data["template"],
                     )
                     added_count += 1
                     logger.info(f"✅ Sample template added: ID={template_id}")

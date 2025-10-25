@@ -1,0 +1,48 @@
+# Git属性設定 - 改行コードをLFで統一
+
+# テキストファイルは全てLF
+* text=auto eol=lf
+
+# Python関連ファイルは明示的にLF
+*.py text eol=lf
+*.pyi text eol=lf
+*.pyx text eol=lf
+*.pxd text eol=lf
+
+# 設定ファイル
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.conf text eol=lf
+
+# ドキュメント
+*.md text eol=lf
+*.txt text eol=lf
+*.rst text eol=lf
+
+# データファイル
+*.tsv text eol=lf
+*.csv text eol=lf
+*.sql text eol=lf
+
+# スクリプト
+*.sh text eol=lf
+*.bash text eol=lf
+
+# バイナリファイル（変更しない）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

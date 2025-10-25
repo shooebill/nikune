@@ -59,7 +59,16 @@ class SchedulerManager:
             default_config = {
                 "daily_posts": 3,
                 "post_times": ["09:00", "13:30", "19:00"],
-                "categories": ["お肉", "日常", "焼肉", "ステーキ", "ハンバーグ", "カレー", "ラーメン", "グルメ"],
+                "categories": [
+                    "お肉",
+                    "日常",
+                    "焼肉",
+                    "ステーキ",
+                    "ハンバーグ",
+                    "カレー",
+                    "ラーメン",
+                    "グルメ",
+                ],
                 "random_delay": True,
                 "max_delay_minutes": 15,
             }
@@ -90,7 +99,12 @@ class SchedulerManager:
             logger.error(f"❌ Failed to setup schedule: {e}")
             raise
 
-    def _scheduled_post(self, categories: List[str], random_delay: bool = True, max_delay_minutes: int = 15) -> None:
+    def _scheduled_post(
+        self,
+        categories: List[str],
+        random_delay: bool = True,
+        max_delay_minutes: int = 15,
+    ) -> None:
         """
         スケジュールされた投稿を実行
 
