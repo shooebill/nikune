@@ -2,7 +2,7 @@
 
 可愛い子熊「nikune」がお肉のおいしさを自動投稿するTwitterボット
 
-[![Python](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/downloads/release/python-3140/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -25,9 +25,11 @@
 
 ### 📋 前提条件
 
-- **Python 3.8+** （Python 3.10+推奨）
+- **Python 3.14** （2025年10月リリースの最新安定版、Windows環境で動作確認済み）
 - **Redis Server** （必須：重複防止機能とシステム安定性に必要）
 - **Twitter API v2** アクセス権限
+
+> 💡 **最新技術**: このプロジェクトは最新のPython 3.14を採用し、Free-threaded Python、Template literals (t-strings)、JIT compilerなどの最先端機能を活用可能です
 
 ### 1. 🐍 環境準備
 
@@ -35,7 +37,7 @@
 
 ```bash
 # uvがインストール済みの場合
-uv python install 3.12  # またはお好みのバージョン
+uv python install 3.14  # 最新安定版
 uv sync
 ```
 
