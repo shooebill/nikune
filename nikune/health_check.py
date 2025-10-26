@@ -38,7 +38,7 @@ class HealthChecker:
         }
 
         # 全体の健全性を判定
-        results["overall"] = all(results.values())
+        results["overall"] = all(v for k, v in results.items() if k != "overall")
 
         return results
 
