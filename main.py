@@ -14,6 +14,7 @@ from typing import Dict, Optional
 from config.settings import BOT_NAME
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
+from nikune.health_check import HealthChecker
 from nikune.scheduler import SchedulerManager
 from nikune.twitter_client import TwitterClient
 
@@ -58,8 +59,18 @@ def test_all_components() -> bool:
     print("=" * 50)
 
     try:
+        # ヘルスチェッカーを使用した包括的テスト
+        health_checker = HealthChecker()
+        health_results = health_checker.check_all_components()
+
+        print("1. System Health Check...")
+        if not health_results["overall"]:
+            print("❌ System health check failed")
+            return False
+        print("✅ System health: OK")
+
         # データベース接続テスト
-        print("1. Testing Database Connection...")
+        print("\n2. Testing Database Connection...")
         with DatabaseManager() as db_manager:
             # サンプルデータセットアップ
             if not setup_sample_data(db_manager):
@@ -70,7 +81,7 @@ def test_all_components() -> bool:
             print(f"✅ Database: {len(templates)} templates available")
 
         # Twitter接続テスト
-        print("\n2. Testing Twitter API Connection...")
+        print("\n3. Testing Twitter API Connection...")
         twitter_client = TwitterClient()
         if twitter_client.test_connection():
             print("✅ Twitter API: Connection successful")
@@ -79,7 +90,7 @@ def test_all_components() -> bool:
             return False
 
         # コンテンツ生成テスト
-        print("\n3. Testing Content Generation...")
+        print("\n4. Testing Content Generation...")
         with ContentGenerator() as generator:
             content = generator.generate_tweet_content()
             if content:
@@ -90,7 +101,7 @@ def test_all_components() -> bool:
                 return False
 
         # スケジューラーテスト
-        print("\n4. Testing Scheduler...")
+        print("\n5. Testing Scheduler...")
         with SchedulerManager() as scheduler:
             # テスト用スケジュール設定
             test_config = {
@@ -317,6 +328,7 @@ def main() -> None:
         epilog="""
 使用例:
   python main.py --test                    # 全コンポーネントテスト
+  python main.py --health                  # システム健全性チェック
   python main.py --post-now                # 即座に1回投稿
   python main.py --post-now --dry-run      # ドライランモード（投稿せず内容のみ表示）
   python main.py --post-now --category お肉 # カテゴリ指定で投稿
@@ -331,6 +343,7 @@ def main() -> None:
     # 実行モードオプション
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--test", action="store_true", help="全コンポーネントのテスト実行")
+    group.add_argument("--health", action="store_true", help="システム健全性チェック")
     group.add_argument("--post-now", action="store_true", help="即座に1回ツイート投稿")
     group.add_argument("--schedule", action="store_true", help="スケジューラーを開始")
     group.add_argument("--setup-db", action="store_true", help="データベースセットアップ")
@@ -362,6 +375,10 @@ def main() -> None:
 
         if args.test:
             success = test_all_components()
+        elif args.health:
+            health_checker = HealthChecker()
+            health_checker.run_diagnostic()
+            success = True
         elif args.post_now:
             success = post_now_command(
                 category=args.category,

@@ -64,10 +64,25 @@ class DatabaseManager:
     def _init_redis(self) -> None:
         """Redis接続を初期化"""
         try:
-            self.redis_client = redis.Redis(host=self.redis_host, port=self.redis_port, decode_responses=True)
+            self.redis_client = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                decode_responses=True,
+                socket_connect_timeout=5,  # 接続タイムアウト（秒）
+                socket_timeout=5,  # ソケットタイムアウト（秒）
+                retry_on_timeout=True,  # タイムアウト時のリトライ
+            )
             # 接続テスト
             self.redis_client.ping()
             logger.info("✅ Redis connection established")
+        except redis.ConnectionError as e:
+            logger.error(f"❌ Redis connection failed: {e}")
+            logger.error("💡 Redisサーバーが起動しているか確認してください")
+            raise
+        except redis.TimeoutError as e:
+            logger.error(f"❌ Redis connection timeout: {e}")
+            logger.error("💡 Redisサーバーの応答が遅い可能性があります")
+            raise
         except Exception as e:
             logger.error(f"❌ Redis connection failed: {e}")
             raise

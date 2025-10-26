@@ -341,13 +341,16 @@ class SchedulerManager:
             category: カテゴリ指定
         """
         try:
+            job_id = None
 
             def one_time_post() -> None:
+                nonlocal job_id  # noqa: F824
                 self._scheduled_post([category] if category else ["お肉", "日常"])
                 # この実行後にジョブをキャンセル
-                schedule.CancelJob
+                if job_id:
+                    schedule.cancel_job(job_id)
 
-            schedule.every(delay_minutes).minutes.do(one_time_post)
+            job_id = schedule.every(delay_minutes).minutes.do(one_time_post)
             logger.info(f"⏰ One-time post scheduled in {delay_minutes} minutes")
 
         except Exception as e:

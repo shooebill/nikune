@@ -49,6 +49,15 @@ def validate_config() -> bool:
             missing_vars.append(var_names[i])
 
     if missing_vars:
+        print("❌ 環境変数が設定されていません")
+        print("📝 以下の環境変数を .env ファイルに設定してください：")
+        for var in missing_vars:
+            print(f"   {var}=your_value_here")
+        print("\n💡 .env ファイルの例：")
+        print("TWITTER_API_KEY=your_api_key")
+        print("TWITTER_API_SECRET=your_api_secret")
+        print("TWITTER_ACCESS_TOKEN=your_access_token")
+        print("TWITTER_ACCESS_TOKEN_SECRET=your_access_token_secret")
         raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
 
     print(f"✅ {BOT_NAME} configuration loaded successfully")

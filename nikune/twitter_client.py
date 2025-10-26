@@ -4,6 +4,7 @@ Twitter APIとの接続、ツイート投稿などを担当
 """
 
 import logging
+from typing import Optional
 
 import tweepy
 
@@ -72,12 +73,12 @@ class TwitterClient:
             logger.error(f"❌ Connection test failed: {e}")
             return False
 
-    def post_tweet(self, text: str) -> bool:
+    def post_tweet(self, text: str) -> Optional[str]:
         """ツイートを投稿"""
         try:
             if self.client is None:
                 logger.error("❌ Twitter client not initialized")
-                return False
+                return None
 
             # 文字数チェック（280文字制限）
             if len(text) > 280:
@@ -91,11 +92,11 @@ class TwitterClient:
             logger.info(f"✅ Tweet posted successfully! ID: {tweet_id}")
             logger.info(f"📝 Content: {text}")
 
-            return True
+            return tweet_id
 
         except Exception as e:
             logger.error(f"❌ Failed to post tweet: {e}")
-            return False
+            return None
 
     def retweet(self, tweet_id: str) -> bool:
         """指定されたツイートをリツイート"""
