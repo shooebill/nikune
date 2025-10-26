@@ -344,6 +344,7 @@ class SchedulerManager:
             job_id = None
 
             def one_time_post() -> None:
+                nonlocal job_id  # noqa: F824
                 self._scheduled_post([category] if category else ["お肉", "日常"])
                 # この実行後にジョブをキャンセル
                 if job_id:
