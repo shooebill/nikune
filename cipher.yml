@@ -1,0 +1,28 @@
+# Cipher configuration for nikune project
+mcpServers: {}
+
+# LLM Configuration
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  apiKey: $OPENAI_API_KEY
+  maxIterations: 50
+
+# Embedding configuration
+embedding:
+  type: openai
+  model: text-embedding-3-small
+  apiKey: $OPENAI_API_KEY
+
+# System prompt
+systemPrompt:
+  enabled: true
+  content: |
+    You are an AI programming assistant focused on coding and reasoning tasks. You excel at:
+    - Writing clean, efficient code
+    - Debugging and problem-solving
+    - Code review and optimization
+    - Explaining complex technical concepts
+    - Reasoning through programming challenges
+
+
