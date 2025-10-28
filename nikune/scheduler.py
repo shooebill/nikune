@@ -201,8 +201,8 @@ class SchedulerManager:
                 if results.get("skipped_rate_limit", 0) > 0:
                     logger.info("   ⏰ Skipped due to rate limit")
 
-                if results.get("errors"):
-                    errors = results.get("errors", [])
+                errors = results.get("errors", [])
+                if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
                     for error in errors[:3]:  # 最初の3つのエラーのみ表示
                         logger.warning(f"      - {error}")

@@ -328,13 +328,9 @@ class ContentGenerator:
             ]
 
             # ランダムにコメントを選択
-            import random
-
             base_comment = random.choice(comment_templates)
 
             # 時間帯に応じた追加コメント
-            from datetime import datetime
-
             current_hour = datetime.now().hour
 
             if 6 <= current_hour < 10:

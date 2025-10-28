@@ -4,8 +4,9 @@ nikune bot auto quote retweeter
 """
 
 import logging
+from collections import deque
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Deque
 
 from config.settings import BOT_NAME
 from nikune.content_generator import ContentGenerator
@@ -27,7 +28,7 @@ class AutoQuoteRetweeter:
         self.bot_name = BOT_NAME
 
         # 処理済みツイートを追跡（重複防止）
-        self.processed_tweets: Set[str] = set()
+        self.processed_tweets: Deque[str] = deque(maxlen=1000)
 
         # レート制限管理
         self.last_quote_time: Optional[datetime] = None
@@ -54,7 +55,7 @@ class AutoQuoteRetweeter:
                 "meat_related_found": 0,
                 "quote_posted": 0,
                 "skipped_rate_limit": 0,
-                "errors": []
+                "errors": [],
             }
 
             # レート制限チェック
@@ -104,7 +105,7 @@ class AutoQuoteRetweeter:
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
 
                         # 処理済みとしてマーク
-                        self.processed_tweets.add(tweet.id)
+                        self.processed_tweets.append(tweet.id)
 
                         # 1回の実行で1件のみ処理（スパム防止）
                         break
@@ -153,13 +154,10 @@ class AutoQuoteRetweeter:
 
     def cleanup_old_processed_tweets(self) -> None:
         """古い処理済みツイートIDを削除（メモリ管理）"""
-        # 1000件を超えた場合、古いものから削除
-        if len(self.processed_tweets) > 1000:
-            # Set を List に変換してソート（実際のIDでのソートは困難なので件数で制限）
-            excess_count = len(self.processed_tweets) - 800
-            tweets_list = list(self.processed_tweets)
-            self.processed_tweets = set(tweets_list[excess_count:])
-            logger.info(f"🧹 Cleaned up {excess_count} old processed tweet IDs")
+        # dequeは自動的に最大サイズを管理するため、明示的なクリーンアップは不要
+        # ログ出力のみ残す
+        if len(self.processed_tweets) >= 900:  # 上限に近い場合のログ
+            logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/1000")
 
     def get_status(self) -> Dict[str, Any]:
         """現在のステータス情報を取得"""
