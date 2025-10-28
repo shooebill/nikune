@@ -28,6 +28,9 @@ pyproject.toml
 data/templates.db
 data/tweet_templates.tsv
 data/tweet_templates.generated.tsv
+
+# Redis dump file
+dump.rdb
 data/exported_templates.tsv
 
 # サンプルデータとマスタデータは保持
