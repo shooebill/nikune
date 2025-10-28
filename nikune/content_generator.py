@@ -262,6 +262,99 @@ class ContentGenerator:
         """コンテキストマネージャー用"""
         self.close()
 
+    def is_meat_related_tweet(self, text: str) -> bool:
+        """お肉関連ツイートかどうか判定"""
+        try:
+            # お肉関連キーワード
+            meat_keywords = [
+                "肉",
+                "お肉",
+                "焼肉",
+                "ステーキ",
+                "ハンバーグ",
+                "すき焼き",
+                "しゃぶしゃぶ",
+                "牛肉",
+                "豚肉",
+                "鶏肉",
+                "ラム肉",
+                "ジンギスカン",
+                "バーベキュー",
+                "BBQ",
+                "焼き鳥",
+                "唐揚げ",
+                "とんかつ",
+                "牛丼",
+                "豚丼",
+                "焼き豚",
+                "ローストビーフ",
+                "ミートボール",
+                "ハンバーガー",
+                "チキン",
+                "ポーク",
+                "ビーフ",
+                "肉汁",
+            ]
+
+            # NGワード（フィルタリング）
+            ng_keywords = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+            # NGワードチェック
+            if any(ng in text for ng in ng_keywords):
+                return False
+
+            # お肉キーワードチェック
+            return any(keyword in text for keyword in meat_keywords)
+
+        except Exception as e:
+            logger.error(f"❌ Error checking meat keywords: {e}")
+            return False
+
+    def generate_quote_comment(self, original_tweet_text: str) -> str:
+        """お肉関連ツイート用のコメント生成"""
+        try:
+            # nikune風コメントテンプレート
+            comment_templates = [
+                "🐻 おいしそう！",
+                "🥩 お肉だ〜！食べたい！",
+                "😋 これは美味しそうですね〜",
+                "🤤 お肉愛が伝わってきます！",
+                "🐻💕 素敵なお肉ですね！",
+                "🥩✨ 美味しそうで羨ましいです！",
+                "🍴 いいですね〜食べてみたい！",
+                "🐻🥩 お肉最高〜！",
+                "😍 とても美味しそう！",
+                "🥩🔥 素晴らしいお肉ですね！",
+            ]
+
+            # ランダムにコメントを選択
+            import random
+
+            base_comment = random.choice(comment_templates)
+
+            # 時間帯に応じた追加コメント
+            from datetime import datetime
+
+            current_hour = datetime.now().hour
+
+            if 6 <= current_hour < 10:
+                time_comment = " 朝からお肉いいですね〜"
+            elif 11 <= current_hour < 14:
+                time_comment = " お昼のお肉タイム！"
+            elif 17 <= current_hour < 21:
+                time_comment = " 夕食が楽しみになります！"
+            else:
+                time_comment = ""
+
+            final_comment = base_comment + time_comment
+
+            logger.info(f"✅ Generated quote comment: {final_comment}")
+            return final_comment
+
+        except Exception as e:
+            logger.error(f"❌ Error generating quote comment: {e}")
+            return "🐻 お肉〜！"  # フォールバック
+
 
 # テスト用関数
 def test_content_generator() -> None:

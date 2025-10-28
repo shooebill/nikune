@@ -128,6 +128,55 @@ class TwitterClient:
             logger.error(f"❌ Failed to like tweet: {e}")
             return False
 
+    def quote_tweet(self, tweet_id: str, comment: str) -> Optional[str]:
+        """コメント付きリツイート（Quote Tweet）"""
+        try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return None
+
+            # 文字数チェック（280文字制限 - 引用分を考慮）
+            if len(comment) > 250:  # 引用URLを考慮して短めに設定
+                logger.warning(f"Comment too long ({len(comment)} chars), truncating...")
+                comment = comment[:247] + "..."
+
+            # コメント付きリツイート実行
+            response = self.client.create_tweet(text=comment, quote_tweet_id=tweet_id)
+            quote_tweet_id = response.data["id"]
+
+            logger.info(f"✅ Quote tweet posted successfully! ID: {quote_tweet_id}")
+            logger.info(f"📝 Comment: {comment}")
+            logger.info(f"🔗 Original tweet ID: {tweet_id}")
+
+            return quote_tweet_id
+
+        except Exception as e:
+            logger.error(f"❌ Failed to quote tweet: {e}")
+            return None
+
+    def get_home_timeline(self, max_results: int = 10) -> Optional[list]:
+        """フォロー中ユーザーのタイムライン取得"""
+        try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return None
+
+            # タイムライン取得
+            tweets = self.client.get_home_timeline(
+                max_results=max_results, tweet_fields=["created_at", "author_id", "text", "public_metrics"]
+            )
+
+            if tweets.data:
+                logger.info(f"✅ Retrieved {len(tweets.data)} tweets from timeline")
+                return tweets.data
+            else:
+                logger.info("📭 No tweets found in timeline")
+                return []
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get home timeline: {e}")
+            return None
+
 
 # テスト用関数
 def test_twitter_client() -> None:

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import schedule
 
 from config.settings import BOT_NAME
+from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.twitter_client import TwitterClient
@@ -41,6 +42,7 @@ class SchedulerManager:
         self.db_manager = db_manager or DatabaseManager()
         self.content_generator = content_generator or ContentGenerator(self.db_manager)
         self.twitter_client = twitter_client or TwitterClient()
+        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager)
 
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
@@ -59,6 +61,7 @@ class SchedulerManager:
             default_config = {
                 "daily_posts": 3,
                 "post_times": ["09:00", "13:30", "19:00"],
+                "quote_check_times": ["10:30", "15:00", "21:00"],  # Quote Retweetチェック時間
                 "categories": [
                     "お肉",
                     "日常",
@@ -90,10 +93,19 @@ class SchedulerManager:
 
                 logger.info(f"📅 Scheduled tweet at {post_time}")
 
+            # Quote Retweetチェック時間を設定
+            quote_check_times: list[str] = config.get("quote_check_times", [])
+            for quote_time in quote_check_times:
+                schedule.every().day.at(quote_time).do(self._scheduled_quote_check)
+                logger.info(f"🔄 Scheduled quote retweet check at {quote_time}")
+
             # 定期メンテナンス（毎日深夜）
             schedule.every().day.at("03:00").do(self._daily_maintenance)
 
-            logger.info(f"✅ Schedule setup completed: {len(post_times)} daily posts")
+            logger.info(
+                f"✅ Schedule setup completed: {len(post_times)} posts, "
+                f"{len(quote_check_times)} quote checks, 1 maintenance"
+            )
 
         except Exception as e:
             logger.error(f"❌ Failed to setup schedule: {e}")
@@ -169,6 +181,39 @@ class SchedulerManager:
 
         except Exception as e:
             logger.error(f"❌ Daily maintenance failed: {e}")
+
+    def _scheduled_quote_check(self) -> None:
+        """
+        スケジュールされたQuote Retweetチェック
+        """
+        try:
+            logger.info("🔄 Starting scheduled quote retweet check...")
+
+            # Quote Retweetチェック実行
+            results = self.auto_quote_retweeter.check_and_quote_tweets(dry_run=False)
+
+            if results["success"]:
+                logger.info("✅ Quote check completed:")
+                logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
+                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
+
+                if results.get("skipped_rate_limit", 0) > 0:
+                    logger.info("   ⏰ Skipped due to rate limit")
+
+                if results.get("errors"):
+                    errors = results.get("errors", [])
+                    logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
+                    for error in errors[:3]:  # 最初の3つのエラーのみ表示
+                        logger.warning(f"      - {error}")
+            else:
+                logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")
+
+            # 古い処理済みツイートをクリーンアップ
+            self.auto_quote_retweeter.cleanup_old_processed_tweets()
+
+        except Exception as e:
+            logger.error(f"❌ Error in scheduled quote check: {e}")
 
     def start_scheduler(self, blocking: bool = True) -> None:
         """

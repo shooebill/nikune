@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from config.settings import BOT_NAME
+from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.health_check import HealthChecker
@@ -288,6 +289,61 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
         return False
 
 
+def check_quote_retweet_command(dry_run: bool = False) -> bool:
+    """
+    Quote Retweet チェック・実行コマンド
+
+    Args:
+        dry_run: True の場合、実際には投稿せずにログ出力のみ
+
+    Returns:
+        実行成功かどうか
+    """
+    try:
+        logger.info("🔄 Starting quote retweet check...")
+
+        with DatabaseManager() as db_manager:
+            # Auto Quote Retweeter 作成
+            retweeter = AutoQuoteRetweeter(db_manager)
+
+            # ステータス表示
+            status = retweeter.get_status()
+            logger.info(f"📊 Quote retweeter status: {status}")
+
+            # レート制限チェック
+            if not status["can_quote_now"]:
+                if status["next_available_time"]:
+                    logger.info(f"⏰ Next quote available at: {status['next_available_time']}")
+                else:
+                    logger.info("⏰ Quote tweets temporarily limited")
+                return True  # エラーではないのでTrueを返す
+
+            # Quote Retweet実行
+            results = retweeter.check_and_quote_tweets(dry_run=dry_run)
+
+            # 結果表示
+            if results["success"]:
+                logger.info("✅ Quote retweet check completed:")
+                logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
+                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
+
+                if results.get("errors"):
+                    errors = results.get("errors", [])
+                    logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
+                    for error in errors:
+                        logger.warning(f"      - {error}")
+
+                return True
+            else:
+                logger.error(f"❌ Quote retweet check failed: {results.get('error', 'Unknown error')}")
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ Failed to execute quote retweet command: {e}")
+        return False
+
+
 def setup_database_command() -> bool:
     """データベースセットアップ（レガシー関数）"""
     print(f"🐻 {BOT_NAME} - Setting up database...")
@@ -334,6 +390,8 @@ def main() -> None:
   python main.py --post-now --category お肉 # カテゴリ指定で投稿
   python main.py --post-now --text "こんにちは！" # カスタムテキストで投稿
   python main.py --post-now --text "テスト" --dry-run # カスタムテキストのドライラン
+  python main.py --quote-check              # お肉関連ツイートをチェック・Quote Retweet
+  python main.py --quote-check --dry-run    # Quote Retweetのドライラン
   python main.py --schedule                # スケジューラー開始
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
   python main.py --setup-db --file data/custom.tsv # 指定ファイルからインポート
@@ -345,6 +403,7 @@ def main() -> None:
     group.add_argument("--test", action="store_true", help="全コンポーネントのテスト実行")
     group.add_argument("--health", action="store_true", help="システム健全性チェック")
     group.add_argument("--post-now", action="store_true", help="即座に1回ツイート投稿")
+    group.add_argument("--quote-check", action="store_true", help="お肉関連ツイートをチェック・Quote Retweet")
     group.add_argument("--schedule", action="store_true", help="スケジューラーを開始")
     group.add_argument("--setup-db", action="store_true", help="データベースセットアップ")
 
@@ -386,6 +445,8 @@ def main() -> None:
                 text=args.text,
                 dry_run=args.dry_run,
             )
+        elif args.quote_check:
+            success = check_quote_retweet_command(dry_run=args.dry_run)
         elif args.schedule:
             success = start_scheduler_command(config_file=args.config)
         elif args.setup_db:
