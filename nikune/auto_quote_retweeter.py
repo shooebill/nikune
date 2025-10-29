@@ -205,8 +205,8 @@ class AutoQuoteRetweeter:
         """古い処理済みツイートIDを削除（メモリ管理）"""
         # dequeは自動的に最大サイズを管理するため、明示的なクリーンアップは不要
         # ログ出力のみ残す
-        if len(self.processed_tweets) >= 900:  # 上限に近い場合のログ
-            logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/1000")
+        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * 0.9:  # 上限に近い場合のログ
+            logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/{MAX_PROCESSED_TWEETS}")
 
     def get_status(self) -> Dict[str, Any]:
         """現在のステータス情報を取得"""
