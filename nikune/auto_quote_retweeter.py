@@ -65,6 +65,7 @@ class AutoQuoteRetweeter:
             if not self._can_quote_now():
                 logger.info("⏰ Rate limit: skipping quote retweet check")
                 results["skipped_rate_limit"] = 1
+                results["success"] = True
                 return results
 
             # タイムライン取得（ドライラン時はモックデータ使用）
@@ -76,6 +77,7 @@ class AutoQuoteRetweeter:
 
             if not timeline_tweets:
                 logger.info("📭 No tweets found in timeline")
+                results["success"] = True
                 return results
 
             results["checked_tweets"] = len(timeline_tweets)

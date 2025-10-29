@@ -73,7 +73,7 @@ uv run pytest tests/test_specific.py
 ## Environment Setup Notes
 
 - **Package Management**: Uses `uv` for ultra-fast dependency management (replaces pip/venv)
-- **Python Version**: Requires Python 3.14+ (automatically managed by uv)
+- **Python Version**: Requires Python 3.13+ (automatically managed by uv)
 - **Virtual Environment**: Automatically created/managed by uv (no manual activation needed)
 - **Twitter API credentials**: Store in `.env` file in project root
 - **Main dependencies**: tweepy, schedule, requests, python-dotenv, redis
@@ -111,7 +111,7 @@ All core functionalities implemented and tested:
 - Comprehensive CLI interface for all operations
 - CSV import/export for template management
 - Full error handling and logging
-- **🆕 UV Package Management**: Ultra-fast dependency management with Python 3.14
+- **🆕 UV Package Management**: Ultra-fast dependency management with Python 3.13+
 
 Ready for production deployment! 🐻🍖
 
