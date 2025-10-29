@@ -207,7 +207,7 @@ class SchedulerManager:
                 errors = results.get("errors", [])
                 if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
-                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初のMAX_ERRORS_TO_DISPLAY個のエラーのみ表示
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初の3個のエラーのみ表示
                         logger.warning(f"      - {error}")
             else:
                 logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")

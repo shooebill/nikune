@@ -15,6 +15,7 @@ from nikune.twitter_client import TwitterClient
 
 # 定数定義
 MAX_PROCESSED_TWEETS = 1000  # 処理済みツイートの最大追跡数
+CLEANUP_WARNING_THRESHOLD = 0.9  # クリーンアップ警告の閾値
 
 # ログ設定
 logger = logging.getLogger(__name__)
@@ -205,7 +206,7 @@ class AutoQuoteRetweeter:
         """古い処理済みツイートIDを削除（メモリ管理）"""
         # dequeは自動的に最大サイズを管理するため、明示的なクリーンアップは不要
         # ログ出力のみ残す
-        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * 0.9:  # 上限に近い場合のログ
+        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD:  # 上限に近い場合のログ
             logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/{MAX_PROCESSED_TWEETS}")
 
     def get_status(self) -> Dict[str, Any]:

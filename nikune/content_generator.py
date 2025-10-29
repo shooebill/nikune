@@ -313,22 +313,35 @@ class ContentGenerator:
     def generate_quote_comment(self, original_tweet_text: str) -> str:
         """お肉関連ツイート用のコメント生成"""
         try:
-            # nikune風コメントテンプレート
-            comment_templates = [
-                "🐻 おいしそう！",
-                "🥩 お肉だ〜！食べたい！",
-                "😋 これは美味しそうですね〜",
-                "🤤 お肉愛が伝わってきます！",
-                "🐻💕 素敵なお肉ですね！",
-                "🥩✨ 美味しそうで羨ましいです！",
-                "🍴 いいですね〜食べてみたい！",
-                "🐻🥩 お肉最高〜！",
-                "😍 とても美味しそう！",
-                "🥩🔥 素晴らしいお肉ですね！",
-            ]
+            # 元のツイートテキストに基づいてコメントを調整
+            specific_keywords = {
+                "ステーキ": ["🥩 ステーキ美味しそう！", "🔥 ステーキ最高ですね！"],
+                "焼肉": ["🍖 焼肉いいな〜！", "🐻 焼肉パーティー楽しそう！"], 
+                "ハンバーグ": ["🍴 ハンバーグ食べたい！", "😋 ジューシーで美味しそう！"],
+                "BBQ": ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"],
+                "バーベキュー": ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"],
+            }
 
-            # ランダムにコメントを選択
-            base_comment = random.choice(comment_templates)
+            # 特定キーワードに基づくコメント
+            for keyword, comments in specific_keywords.items():
+                if keyword in original_tweet_text:
+                    base_comment = random.choice(comments)
+                    break
+            else:
+                # デフォルトのnikune風コメントテンプレート
+                comment_templates = [
+                    "🐻 おいしそう！",
+                    "🥩 お肉だ〜！食べたい！",
+                    "😋 これは美味しそうですね〜",
+                    "🤤 お肉愛が伝わってきます！",
+                    "🐻💕 素敵なお肉ですね！",
+                    "🥩✨ 美味しそうで羨ましいです！",
+                    "🍴 いいですね〜食べてみたい！",
+                    "🐻🥩 お肉最高〜！",
+                    "😍 とても美味しそう！",
+                    "🥩🔥 素晴らしいお肉ですね！",
+                ]
+                base_comment = random.choice(comment_templates)
 
             # 時間帯に応じた追加コメント
             current_hour = datetime.now().hour
@@ -345,6 +358,7 @@ class ContentGenerator:
             final_comment = base_comment + time_comment
 
             logger.info(f"✅ Generated quote comment: {final_comment}")
+            logger.info(f"📝 Based on original text: {original_tweet_text[:50]}...")
             return final_comment
 
         except Exception as e:
