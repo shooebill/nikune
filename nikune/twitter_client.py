@@ -141,7 +141,7 @@ class TwitterClient:
             # 文字数チェック（280文字制限 - 引用分を考慮）
             if len(comment) > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
                 logger.warning(f"Comment too long ({len(comment)} chars), truncating...")
-                comment = comment[:MAX_QUOTE_COMMENT_LENGTH - 3] + "..."
+                comment = comment[: MAX_QUOTE_COMMENT_LENGTH - 3] + "..."
 
             # コメント付きリツイート実行
             response = self.client.create_tweet(text=comment, quote_tweet_id=tweet_id)
