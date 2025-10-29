@@ -16,6 +16,9 @@ from config.settings import (
     TWITTER_API_SECRET,
 )
 
+# 定数定義
+MAX_QUOTE_COMMENT_LENGTH = 250  # Quote comment の最大文字数
+
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,9 +139,9 @@ class TwitterClient:
                 return None
 
             # 文字数チェック（280文字制限 - 引用分を考慮）
-            if len(comment) > 250:  # 引用URLを考慮して短めに設定
+            if len(comment) > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
                 logger.warning(f"Comment too long ({len(comment)} chars), truncating...")
-                comment = comment[:247] + "..."
+                comment = comment[: MAX_QUOTE_COMMENT_LENGTH - 3] + "..."
 
             # コメント付きリツイート実行
             response = self.client.create_tweet(text=comment, quote_tweet_id=tweet_id)

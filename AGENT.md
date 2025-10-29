@@ -4,71 +4,81 @@
 
 ### Development
 ```bash
-# Activate virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies
-pip install -r requirements.txt
+# All commands use uv for automatic dependency management
+# No manual virtual environment activation needed!
 
 # System test (recommended first run)
-python main.py --test
+uv run python main.py --test
 
 # System health check
-python main.py --health
+uv run python main.py --health
 
 # Post tweet immediately
-python main.py --post-now
+uv run python main.py --post-now
 
 # Post with specific category
-python main.py --post-now --category お肉
+uv run python main.py --post-now --category お肉
+
+# Quote retweet check
+uv run python main.py --quote-check
+
+# Quote retweet check (dry run - no API calls)
+uv run python main.py --quote-check --dry-run
 
 # Start scheduler (runs continuously)
-python main.py --schedule
+uv run python main.py --schedule
 
 # Setup database with sample data
-python main.py --setup-db
+uv run python main.py --setup-db
 
 # Import from CSV
-python main.py --setup-db --csv data/templates.csv
+uv run python main.py --setup-db --csv data/templates.csv
 
-# Update requirements after adding new packages
-pip freeze > requirements.txt
+# Manual dependency management (if needed)
+uv add <package>        # Add package
+uv remove <package>     # Remove package  
+uv sync                 # Sync dependencies
 ```
 
 ### Code Quality
 ```bash
-# Format code
-black .
+# Format code (uv automatically manages dependencies)
+uv run black .
 
 # Sort imports
-isort .
+uv run isort .
 
 # Run both formatting commands
-isort . && black .
+uv run isort . && uv run black .
 
-# Lint code (when flake8 is installed)
-flake8 .
+# Lint code
+uv run flake8 .
 
-# Type check (when mypy is installed)
-mypy nikune/
+# Type check
+uv run mypy nikune/
 ```
 
-### Testing (Future Setup)
+### Testing
 ```bash
-# Run tests (when pytest is installed)
-pytest
+# Run tests
+uv run pytest
 
-# Run tests with coverage (when pytest-cov is installed)
-pytest --cov=nikune
+# Run tests with coverage
+uv run pytest --cov=nikune
+
+# Run specific test
+uv run pytest tests/test_specific.py
 ```
 
 ## Environment Setup Notes
 
-- This project uses Python virtual environment (`.venv/`)
-- Twitter API credentials should be stored in `.env` file
-- Main dependencies: tweepy, schedule, requests, python-dotenv, redis
-- Database: SQLite (persistent) + Redis (caching/session management)
-- Development tools: black, isort, flake8, mypy (configure via .flake8 and pyproject.toml)
+- **Package Management**: Uses `uv` for ultra-fast dependency management (replaces pip/venv)
+- **Python Version**: Requires Python 3.14+ (automatically managed by uv)
+- **Virtual Environment**: Automatically created/managed by uv (no manual activation needed)
+- **Twitter API credentials**: Store in `.env` file in project root
+- **Main dependencies**: tweepy, schedule, requests, python-dotenv, redis
+- **Database**: SQLite (persistent) + Redis (caching/session management)
+- **Development tools**: black, isort, flake8, mypy (all managed via pyproject.toml)
 
 ## Project Structure
 
@@ -91,12 +101,22 @@ pytest --cov=nikune
 
 All core functionalities implemented and tested:
 - Twitter API integration with posting, retweeting, liking
+- **🆕 Auto Quote Retweet**: Automatically quote tweets meat-related content from followed users
 - Dual database system (SQLite + Redis) with duplicate prevention
 - Dynamic content generation with time-based placeholders
 - Flexible scheduling system (default: 9:00, 13:30, 19:00 daily)
+- **🆕 Rate Limiting**: Smart rate limiting (2 quotes/hour, 30min intervals)
+- **🆕 Dry Run Mode**: Test functionality without API calls using mock data
 - System health monitoring and diagnostics
 - Comprehensive CLI interface for all operations
 - CSV import/export for template management
 - Full error handling and logging
+- **🆕 UV Package Management**: Ultra-fast dependency management with Python 3.14
 
 Ready for production deployment! 🐻🍖
+
+### Recent Updates
+- **Auto Quote Retweet System**: Detects meat-related tweets and adds thoughtful comments
+- **Mock Timeline for Testing**: API-free testing with realistic mock data
+- **Enhanced Rate Limiting**: Prevents Twitter API violations with smart throttling
+- **UV Integration**: Modern Python tooling for faster development workflow

@@ -18,6 +18,9 @@ from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.twitter_client import TwitterClient
 
+# 定数定義
+MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
+
 # ロガー設定
 logger = logging.getLogger(__name__)
 
@@ -204,7 +207,7 @@ class SchedulerManager:
                 errors = results.get("errors", [])
                 if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
-                    for error in errors[:3]:  # 最初の3つのエラーのみ表示
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初の数個のエラーのみ表示
                         logger.warning(f"      - {error}")
             else:
                 logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")

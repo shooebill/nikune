@@ -6,12 +6,15 @@ nikune bot auto quote retweeter
 import logging
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Deque
+from typing import Any, Deque, Dict, List, Optional
 
 from config.settings import BOT_NAME
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.twitter_client import TwitterClient
+
+# 定数定義
+MAX_PROCESSED_TWEETS = 1000  # 処理済みツイートの最大追跡数
 
 # ログ設定
 logger = logging.getLogger(__name__)
@@ -28,7 +31,7 @@ class AutoQuoteRetweeter:
         self.bot_name = BOT_NAME
 
         # 処理済みツイートを追跡（重複防止）
-        self.processed_tweets: Deque[str] = deque(maxlen=1000)
+        self.processed_tweets: Deque[str] = deque(maxlen=MAX_PROCESSED_TWEETS)
 
         # レート制限管理
         self.last_quote_time: Optional[datetime] = None
@@ -64,8 +67,13 @@ class AutoQuoteRetweeter:
                 results["skipped_rate_limit"] = 1
                 return results
 
-            # タイムライン取得
-            timeline_tweets = self.twitter_client.get_home_timeline(max_results=20)
+            # タイムライン取得（ドライラン時はモックデータ使用）
+            if dry_run:
+                timeline_tweets = self._get_mock_timeline()
+                logger.info("🎭 Using mock timeline data for dry run")
+            else:
+                timeline_tweets = self.twitter_client.get_home_timeline(max_results=20) or []
+
             if not timeline_tweets:
                 logger.info("📭 No tweets found in timeline")
                 return results
@@ -151,6 +159,45 @@ class AutoQuoteRetweeter:
             return False
         except Exception:
             return False
+
+    def _get_mock_timeline(self) -> List[Any]:
+        """ドライラン用のモックタイムラインデータを生成"""
+        from types import SimpleNamespace
+
+        mock_tweets = [
+            SimpleNamespace(
+                id="mock_tweet_1",
+                text="本日も元気いっぱい11:00よりオープンです！もうご賞味頂けましたか⁉︎数量限定でさらに肉感アップしての登場です。ランチタイムならライス＆豚汁付き是非ご賞味くださいまんせい。#akiba",
+                author_id="mock_user_1",
+                created_at="2025-10-29T10:00:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_2",
+                text="今日は良い天気ですね〜お散歩日和です",
+                author_id="mock_user_2",
+                created_at="2025-10-29T09:30:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_3",
+                text="美味しいステーキを食べました🥩とても柔らかくて最高でした！",
+                author_id="mock_user_3",
+                created_at="2025-10-29T09:00:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_4",
+                text="プログラミングの勉強中です。Pythonは楽しいですね",
+                author_id="mock_user_4",
+                created_at="2025-10-29T08:30:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_5",
+                text="焼肉パーティーしました🍖みんなでワイワイ楽しかった〜",
+                author_id="mock_user_5",
+                created_at="2025-10-29T08:00:00.000Z",
+            ),
+        ]
+
+        return mock_tweets
 
     def cleanup_old_processed_tweets(self) -> None:
         """古い処理済みツイートIDを削除（メモリ管理）"""
