@@ -8,7 +8,11 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Deque, Dict, List, Optional
 
-from config.settings import BOT_NAME
+from config.settings import (
+    BOT_NAME,
+    QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
+    QUOTE_RETWEET_MAX_PER_HOUR,
+)
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.twitter_client import TwitterClient
@@ -34,13 +38,14 @@ class AutoQuoteRetweeter:
         # 処理済みツイートを追跡（重複防止）
         self.processed_tweets: Deque[str] = deque(maxlen=MAX_PROCESSED_TWEETS)
 
-        # レート制限管理
+        # レート制限管理（設定から取得）
         self.last_quote_time: Optional[datetime] = None
-        self.min_interval_minutes = 30  # 最小間隔30分
-        self.max_quotes_per_hour = 2  # 1時間に最大2回
+        self.min_interval_minutes = QUOTE_RETWEET_MIN_INTERVAL_MINUTES
+        self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
 
         logger.info(f"✅ {self.bot_name} Auto Quote Retweeter initialized")
+        logger.info(f"📊 Rate limits: {self.min_interval_minutes}min interval, {self.max_quotes_per_hour}/hour max")
 
     def check_and_quote_tweets(self, dry_run: bool = False) -> Dict[str, Any]:
         """
@@ -150,7 +155,7 @@ class AutoQuoteRetweeter:
 
         return len(self.quotes_in_last_hour) < self.max_quotes_per_hour
 
-    def _is_own_tweet(self, tweet) -> bool:
+    def _is_own_tweet(self, tweet: Any) -> bool:
         """自分のツイートかどうかチェック"""
         try:
             if self.twitter_client.client is None:

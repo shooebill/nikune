@@ -20,6 +20,63 @@ logger = logging.getLogger(__name__)
 class ContentGenerator:
     """コンテンツ生成クラス"""
 
+    # お肉関連キーワード（クラス定数）
+    MEAT_KEYWORDS = [
+        "肉",
+        "お肉",
+        "焼肉",
+        "ステーキ",
+        "ハンバーグ",
+        "すき焼き",
+        "しゃぶしゃぶ",
+        "牛肉",
+        "豚肉",
+        "鶏肉",
+        "ラム肉",
+        "ジンギスカン",
+        "バーベキュー",
+        "BBQ",
+        "焼き鳥",
+        "唐揚げ",
+        "とんかつ",
+        "牛丼",
+        "豚丼",
+        "焼き豚",
+        "ローストビーフ",
+        "ミートボール",
+        "ハンバーガー",
+        "チキン",
+        "ポーク",
+        "ビーフ",
+        "肉汁",
+    ]
+
+    # NGワード（フィルタリング用）
+    NG_KEYWORDS = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+    # キーワード別コメントテンプレート（優先度順）
+    SPECIFIC_KEYWORD_COMMENTS = [
+        ("ステーキ", ["🥩 ステーキ美味しそう！", "🔥 ステーキ最高ですね！"]),
+        ("焼肉", ["🍖 焼肉いいな〜！", "🐻 焼肉パーティー楽しそう！"]),
+        ("ハンバーグ", ["🍴 ハンバーグ食べたい！", "😋 ジューシーで美味しそう！"]),
+        ("BBQ", ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"]),
+        ("バーベキュー", ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"]),
+    ]
+
+    # デフォルトコメントテンプレート
+    DEFAULT_QUOTE_COMMENTS = [
+        "🐻 おいしそう！",
+        "🥩 お肉だ〜！食べたい！",
+        "😋 これは美味しそうですね〜",
+        "🤤 お肉愛が伝わってきます！",
+        "🐻💕 素敵なお肉ですね！",
+        "🥩✨ 美味しそうで羨ましいです！",
+        "🍴 いいですね〜食べてみたい！",
+        "🐻🥩 お肉最高〜！",
+        "😍 とても美味しそう！",
+        "🥩🔥 素晴らしいお肉ですね！",
+    ]
+
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
         コンテンツジェネレーターを初期化
@@ -265,46 +322,12 @@ class ContentGenerator:
     def is_meat_related_tweet(self, text: str) -> bool:
         """お肉関連ツイートかどうか判定"""
         try:
-            # お肉関連キーワード
-            meat_keywords = [
-                "肉",
-                "お肉",
-                "焼肉",
-                "ステーキ",
-                "ハンバーグ",
-                "すき焼き",
-                "しゃぶしゃぶ",
-                "牛肉",
-                "豚肉",
-                "鶏肉",
-                "ラム肉",
-                "ジンギスカン",
-                "バーベキュー",
-                "BBQ",
-                "焼き鳥",
-                "唐揚げ",
-                "とんかつ",
-                "牛丼",
-                "豚丼",
-                "焼き豚",
-                "ローストビーフ",
-                "ミートボール",
-                "ハンバーガー",
-                "チキン",
-                "ポーク",
-                "ビーフ",
-                "肉汁",
-            ]
-
-            # NGワード（フィルタリング）
-            ng_keywords = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
-
             # NGワードチェック
-            if any(ng in text for ng in ng_keywords):
+            if any(ng in text for ng in self.NG_KEYWORDS):
                 return False
 
             # お肉キーワードチェック
-            return any(keyword in text for keyword in meat_keywords)
+            return any(keyword in text for keyword in self.MEAT_KEYWORDS)
 
         except Exception as e:
             logger.error(f"❌ Error checking meat keywords: {e}")
@@ -313,35 +336,14 @@ class ContentGenerator:
     def generate_quote_comment(self, original_tweet_text: str) -> str:
         """お肉関連ツイート用のコメント生成"""
         try:
-            # 元のツイートテキストに基づいてコメントを調整
-            specific_keywords = {
-                "ステーキ": ["🥩 ステーキ美味しそう！", "🔥 ステーキ最高ですね！"],
-                "焼肉": ["🍖 焼肉いいな〜！", "🐻 焼肉パーティー楽しそう！"],
-                "ハンバーグ": ["🍴 ハンバーグ食べたい！", "😋 ジューシーで美味しそう！"],
-                "BBQ": ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"],
-                "バーベキュー": ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"],
-            }
-
-            # 特定キーワードに基づくコメント
-            for keyword, comments in specific_keywords.items():
+            # 優先度順でキーワードマッチング（最初にマッチしたものを使用）
+            for keyword, comments in self.SPECIFIC_KEYWORD_COMMENTS:
                 if keyword in original_tweet_text:
                     base_comment = random.choice(comments)
                     break
             else:
                 # デフォルトのnikune風コメントテンプレート
-                comment_templates = [
-                    "🐻 おいしそう！",
-                    "🥩 お肉だ〜！食べたい！",
-                    "😋 これは美味しそうですね〜",
-                    "🤤 お肉愛が伝わってきます！",
-                    "🐻💕 素敵なお肉ですね！",
-                    "🥩✨ 美味しそうで羨ましいです！",
-                    "🍴 いいですね〜食べてみたい！",
-                    "🐻🥩 お肉最高〜！",
-                    "😍 とても美味しそう！",
-                    "🥩🔥 素晴らしいお肉ですね！",
-                ]
-                base_comment = random.choice(comment_templates)
+                base_comment = random.choice(self.DEFAULT_QUOTE_COMMENTS)
 
             # 時間帯に応じた追加コメント
             current_hour = datetime.now().hour

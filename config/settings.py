@@ -26,6 +26,10 @@ MAX_TWEETS_PER_DAY = 12
 ACTIVE_HOURS_START = 9  # 9時から
 ACTIVE_HOURS_END = 21  # 21時まで
 
+# Quote Retweet設定
+QUOTE_RETWEET_MIN_INTERVAL_MINUTES = int(os.getenv("QUOTE_RETWEET_MIN_INTERVAL_MINUTES", "30"))
+QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
+
 
 # 設定の検証
 def validate_config() -> bool:
