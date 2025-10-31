@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import (
     BOT_NAME,
-    QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
     QUOTE_RETWEET_MAX_PER_HOUR,
+    QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
 )
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
@@ -45,8 +45,30 @@ class AutoQuoteRetweeter:
         self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
 
+        # 自分のユーザーIDをキャッシュ（API呼び出し最適化）
+        self.my_user_id: Optional[str] = self._cache_my_user_id()
+
+        # 警告ログ制御フラグ（繰り返し出力防止）
+        self._warning_logged: bool = False
+
         logger.info(f"✅ {self.bot_name} Auto Quote Retweeter initialized")
-        logger.info(f"📊 Rate limits: {self.min_interval_minutes}min interval, {self.max_quotes_per_hour}/hour max")
+        logger.info(f"📊 Rate limits: {self.min_interval_minutes}min interval, " f"{self.max_quotes_per_hour}/hour max")
+
+    def _cache_my_user_id(self) -> Optional[str]:
+        """初期化時に自分のユーザーIDを取得してキャッシュ"""
+        try:
+            if self.twitter_client.client is None:
+                logger.warning("⚠️ Twitter client not available for user ID caching")
+                return None
+            me = self.twitter_client.client.get_me()
+            if me and me.data:
+                user_id = str(getattr(me.data, "id", ""))
+                logger.info(f"📋 Cached user ID: {user_id}")
+                return user_id
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to cache user ID: {e}")
+            return None
 
     def check_and_quote_tweets(self, dry_run: bool = False) -> Dict[str, Any]:
         """
@@ -158,16 +180,13 @@ class AutoQuoteRetweeter:
         return len(self.quotes_in_last_hour) < self.max_quotes_per_hour
 
     def _is_own_tweet(self, tweet: Any) -> bool:
-        """自分のツイートかどうかチェック"""
+        """自分のツイートかどうかチェック（キャッシュされたIDを使用）"""
         try:
-            if self.twitter_client.client is None:
+            if self.my_user_id is None:
                 return False
-            # 自分のユーザー情報を取得
-            me = self.twitter_client.client.get_me()
-            if me and me.data:
-                # 型の違いによる比較ミスを防ぐため、明示的にstr型へキャスト
-                return str(getattr(tweet, "author_id", "")) == str(getattr(me.data, "id", ""))
-            return False
+            # キャッシュされたユーザーIDと比較（API呼び出しなし）
+            tweet_author_id = str(getattr(tweet, "author_id", ""))
+            return tweet_author_id == self.my_user_id
         except Exception:
             return False
 
@@ -218,9 +237,12 @@ class AutoQuoteRetweeter:
             del self.processed_tweets[oldest_tweet_id]
             logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
 
-        # 処理済みツイート数が上限の90%に達した場合に警告ログを出力
-        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD:
-            logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/{MAX_PROCESSED_TWEETS}")
+        # 処理済みツイート数が上限の90%に達した場合に警告ログを出力（初回のみ）
+        threshold_reached = len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD
+        if threshold_reached and not self._warning_logged:
+            count = len(self.processed_tweets)
+            logger.warning(f"⚠️ Processed tweets approaching limit: {count}/{MAX_PROCESSED_TWEETS}")
+            self._warning_logged = True
 
     def cleanup_old_processed_tweets(self) -> None:
         """パブリックなクリーンアップメソッド（後方互換性）"""

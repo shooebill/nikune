@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from config.settings import BOT_NAME
+from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
 from .database import DatabaseManager
 
@@ -52,8 +52,8 @@ class ContentGenerator:
         "肉汁",
     ]
 
-    # NGワード（フィルタリング用）
-    NG_KEYWORDS = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+    # NGワード（設定ファイルから読み込み）
+    NG_KEYWORDS = NG_KEYWORDS
 
     # キーワード別コメントテンプレート（優先度順）
     SPECIFIC_KEYWORD_COMMENTS = [
@@ -78,13 +78,19 @@ class ContentGenerator:
         "🥩🔥 素晴らしいお肉ですね！",
     ]
 
-    # 時間帯判定用定数
-    MORNING_START = 6
-    MORNING_END = 10
-    LUNCH_START = 11
-    LUNCH_END = 14
-    DINNER_START = 17
-    DINNER_END = 21
+    # 時間帯判定用設定（config/settings.pyから読み込み）
+    MORNING_START = TIME_SETTINGS["MORNING_START"]
+    MORNING_END = TIME_SETTINGS["MORNING_END"]
+    LUNCH_START = TIME_SETTINGS["LUNCH_START"]
+    LUNCH_END = TIME_SETTINGS["LUNCH_END"]
+    DINNER_START = TIME_SETTINGS["DINNER_START"]
+    DINNER_END = TIME_SETTINGS["DINNER_END"]
+
+    # 正規表現パターン定数（可読性向上のため分割定義）
+    # 日本語文字クラス: ひらがな、カタカナ、漢字
+    JAPANESE_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF"
+    # 単語境界パターン: 英数字または日本語文字以外
+    WORD_BOUNDARY_PATTERN = rf"[^\w{JAPANESE_CHARS}]"
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
@@ -334,8 +340,10 @@ class ContentGenerator:
             # NGワードチェック（日本語対応の単語境界を考慮した精度の高い判定）
             # 部分一致による誤検知を防ぐため、日本語文字も含む単語境界を使用
             for ng_word in self.NG_KEYWORDS:
-                # 日本語文字範囲も含めた単語境界パターンで判定
-                if re.search(rf'(?:^|[^\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]){re.escape(ng_word)}(?:[^\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]|$)', text):
+                # 日本語対応単語境界パターンでNGワード判定
+                # クラス定数を使用して可読性を向上
+                pattern = rf"(?:^|{self.WORD_BOUNDARY_PATTERN}){re.escape(ng_word)}(?:{self.WORD_BOUNDARY_PATTERN}|$)"
+                if re.search(pattern, text):
                     logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
                     return False
 

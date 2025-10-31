@@ -30,6 +30,19 @@ ACTIVE_HOURS_END = 21  # 21時まで
 QUOTE_RETWEET_MIN_INTERVAL_MINUTES = int(os.getenv("QUOTE_RETWEET_MIN_INTERVAL_MINUTES", "30"))
 QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
 
+# NGワードリスト（外部設定化）
+NG_KEYWORDS = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+# 時間帯判定用設定（調整可能）
+TIME_SETTINGS = {
+    "MORNING_START": 6,
+    "MORNING_END": 10,
+    "LUNCH_START": 11,
+    "LUNCH_END": 14,
+    "DINNER_START": 17,
+    "DINNER_END": 21,
+}
+
 
 # 設定の検証
 def validate_config() -> bool:
