@@ -37,6 +37,7 @@ class AutoQuoteRetweeter:
 
         # 処理済みツイートを追跡（重複防止）
         # OrderedDictで順序保持とO(1)検索を両立、サイズ管理も自動化
+        # TODO: これは redis で管理したい - アプリ再起動後も処理済み履歴を永続化
         self.processed_tweets: OrderedDict[str, datetime] = OrderedDict()
 
         # レート制限管理（設定から取得）

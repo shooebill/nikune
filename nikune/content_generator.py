@@ -7,7 +7,7 @@ import logging
 import random
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Pattern
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -87,8 +87,8 @@ class ContentGenerator:
     DINNER_END = TIME_SETTINGS["DINNER_END"]
 
     # 正規表現パターン定数（可読性向上のため分割定義）
-    # 日本語文字クラス: ひらがな、カタカナ、漢字
-    JAPANESE_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF"
+    # 日本語文字クラス: ひらがな、カタカナ、漢字（拡張Aも含む）
+    JAPANESE_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF"
     # 単語境界パターン: 英数字または日本語文字以外
     WORD_BOUNDARY_PATTERN = rf"[^\w{JAPANESE_CHARS}]"
 
@@ -102,7 +102,19 @@ class ContentGenerator:
         self.db_manager = db_manager or DatabaseManager()
         self.bot_name = BOT_NAME
 
+        # NGワード正規表現パターンを初期化時にコンパイル（パフォーマンス最適化）
+        self._ng_patterns = self._compile_ng_patterns()
+
         logger.info(f"✅ {self.bot_name} Content generator initialized")
+
+    def _compile_ng_patterns(self) -> List[Pattern[str]]:
+        """NGワードの正規表現パターンを事前にコンパイル"""
+        patterns = []
+        for ng_word in self.NG_KEYWORDS:
+            pattern = rf"(?:^|{self.WORD_BOUNDARY_PATTERN}){re.escape(ng_word)}(?:{self.WORD_BOUNDARY_PATTERN}|$)"
+            patterns.append(re.compile(pattern))
+        logger.debug(f"📋 Compiled {len(patterns)} NG word patterns")
+        return patterns
 
     def generate_tweet_content(self, category: Optional[str] = None, tone: Optional[str] = None) -> Optional[str]:
         """
@@ -337,13 +349,11 @@ class ContentGenerator:
     def is_meat_related_tweet(self, text: str) -> bool:
         """お肉関連ツイートかどうか判定"""
         try:
-            # NGワードチェック（日本語対応の単語境界を考慮した精度の高い判定）
-            # 部分一致による誤検知を防ぐため、日本語文字も含む単語境界を使用
-            for ng_word in self.NG_KEYWORDS:
-                # 日本語対応単語境界パターンでNGワード判定
-                # クラス定数を使用して可読性を向上
-                pattern = rf"(?:^|{self.WORD_BOUNDARY_PATTERN}){re.escape(ng_word)}(?:{self.WORD_BOUNDARY_PATTERN}|$)"
-                if re.search(pattern, text):
+            # NGワードチェック（事前コンパイル済みパターンを使用）
+            # パフォーマンス最適化のため、初期化時にコンパイルしたパターンを使用
+            for i, pattern in enumerate(self._ng_patterns):
+                if pattern.search(text):
+                    ng_word = self.NG_KEYWORDS[i]
                     logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
                     return False
 
