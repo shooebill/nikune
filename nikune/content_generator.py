@@ -5,6 +5,7 @@ nikune bot content generator
 
 import logging
 import random
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -76,6 +77,14 @@ class ContentGenerator:
         "😍 とても美味しそう！",
         "🥩🔥 素晴らしいお肉ですね！",
     ]
+
+    # 時間帯判定用定数
+    MORNING_START = 6
+    MORNING_END = 10
+    LUNCH_START = 11
+    LUNCH_END = 14
+    DINNER_START = 17
+    DINNER_END = 21
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
@@ -322,11 +331,15 @@ class ContentGenerator:
     def is_meat_related_tweet(self, text: str) -> bool:
         """お肉関連ツイートかどうか判定"""
         try:
-            # NGワードチェック
-            if any(ng in text for ng in self.NG_KEYWORDS):
-                return False
+            # NGワードチェック（単語境界を考慮した精度の高い判定）
+            # 部分一致による誤検知を防ぐため、単語境界（\b）を使用
+            for ng_word in self.NG_KEYWORDS:
+                # 日本語の場合は前後に非文字（スペース、句読点等）がある場合のみマッチ
+                if re.search(rf'(?:^|[^\w]){re.escape(ng_word)}(?:[^\w]|$)', text):
+                    logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
+                    return False
 
-            # お肉キーワードチェック
+            # お肉キーワードチェック（部分一致で十分）
             return any(keyword in text for keyword in self.MEAT_KEYWORDS)
 
         except Exception as e:
@@ -348,11 +361,11 @@ class ContentGenerator:
             # 時間帯に応じた追加コメント
             current_hour = datetime.now().hour
 
-            if 6 <= current_hour < 10:
+            if self.MORNING_START <= current_hour < self.MORNING_END:
                 time_comment = " 朝からお肉いいですね〜"
-            elif 11 <= current_hour < 14:
+            elif self.LUNCH_START <= current_hour < self.LUNCH_END:
                 time_comment = " お昼のお肉タイム！"
-            elif 17 <= current_hour < 21:
+            elif self.DINNER_START <= current_hour < self.DINNER_END:
                 time_comment = " 夕食が楽しみになります！"
             else:
                 time_comment = ""

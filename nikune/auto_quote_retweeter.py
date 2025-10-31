@@ -37,6 +37,7 @@ class AutoQuoteRetweeter:
 
         # 処理済みツイートを追跡（重複防止）
         self.processed_tweets: Deque[str] = deque(maxlen=MAX_PROCESSED_TWEETS)
+        self.processed_tweets_set: set = set()  # O(1)高速検索用
 
         # レート制限管理（設定から取得）
         self.last_quote_time: Optional[datetime] = None
@@ -92,8 +93,8 @@ class AutoQuoteRetweeter:
             # 各ツイートをチェック
             for tweet in timeline_tweets:
                 try:
-                    # 既に処理済みかチェック
-                    if tweet.id in self.processed_tweets:
+                    # 既に処理済みかチェック（高速検索用setを使用）
+                    if tweet.id in self.processed_tweets_set:
                         continue
 
                     # 自分のツイートは除外
@@ -120,8 +121,9 @@ class AutoQuoteRetweeter:
                                 self.quotes_in_last_hour.append(self.last_quote_time)
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
 
-                        # 処理済みとしてマーク
+                        # 処理済みとしてマーク（dequeとsetの両方に追加）
                         self.processed_tweets.append(tweet.id)
+                        self.processed_tweets_set.add(tweet.id)
 
                         # 1回の実行で1件のみ処理（スパム防止）
                         break
@@ -163,7 +165,8 @@ class AutoQuoteRetweeter:
             # 自分のユーザー情報を取得
             me = self.twitter_client.client.get_me()
             if me and me.data:
-                return tweet.author_id == me.data.id
+                # 型の違いによる比較ミスを防ぐため、明示的にstr型へキャスト
+                return str(getattr(tweet, "author_id", "")) == str(getattr(me.data, "id", ""))
             return False
         except Exception:
             return False
@@ -209,9 +212,13 @@ class AutoQuoteRetweeter:
 
     def cleanup_old_processed_tweets(self) -> None:
         """古い処理済みツイートIDを削除（メモリ管理）"""
-        # dequeは自動的に最大サイズを管理するため、明示的なクリーンアップは不要
-        # ログ出力のみ残す
-        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD:  # 上限に近い場合のログ
+        # dequeとsetのサイズが一致しない場合、setを再構築
+        if len(self.processed_tweets_set) != len(self.processed_tweets):
+            self.processed_tweets_set = set(self.processed_tweets)
+            logger.debug("🔧 Synchronized processed_tweets_set with deque")
+
+        # 処理済みツイート数が上限の90%に達した場合に警告ログを出力
+        if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD:
             logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/{MAX_PROCESSED_TWEETS}")
 
     def get_status(self) -> Dict[str, Any]:
