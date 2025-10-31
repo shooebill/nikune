@@ -4,9 +4,9 @@ nikune bot auto quote retweeter
 """
 
 import logging
-from collections import deque
+from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from config.settings import (
     BOT_NAME,
@@ -36,8 +36,8 @@ class AutoQuoteRetweeter:
         self.bot_name = BOT_NAME
 
         # 処理済みツイートを追跡（重複防止）
-        self.processed_tweets: Deque[str] = deque(maxlen=MAX_PROCESSED_TWEETS)
-        self.processed_tweets_set: set = set()  # O(1)高速検索用
+        # OrderedDictで順序保持とO(1)検索を両立、サイズ管理も自動化
+        self.processed_tweets: OrderedDict[str, datetime] = OrderedDict()
 
         # レート制限管理（設定から取得）
         self.last_quote_time: Optional[datetime] = None
@@ -93,8 +93,8 @@ class AutoQuoteRetweeter:
             # 各ツイートをチェック
             for tweet in timeline_tweets:
                 try:
-                    # 既に処理済みかチェック（高速検索用setを使用）
-                    if tweet.id in self.processed_tweets_set:
+                    # 既に処理済みかチェック（OrderedDictでO(1)検索）
+                    if tweet.id in self.processed_tweets:
                         continue
 
                     # 自分のツイートは除外
@@ -121,9 +121,9 @@ class AutoQuoteRetweeter:
                                 self.quotes_in_last_hour.append(self.last_quote_time)
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
 
-                        # 処理済みとしてマーク（dequeとsetの両方に追加）
-                        self.processed_tweets.append(tweet.id)
-                        self.processed_tweets_set.add(tweet.id)
+                        # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録）
+                        self.processed_tweets[tweet.id] = datetime.now()
+                        self._cleanup_old_processed_tweets()
 
                         # 1回の実行で1件のみ処理（スパム防止）
                         break
@@ -210,16 +210,21 @@ class AutoQuoteRetweeter:
 
         return mock_tweets
 
-    def cleanup_old_processed_tweets(self) -> None:
+    def _cleanup_old_processed_tweets(self) -> None:
         """古い処理済みツイートIDを削除（メモリ管理）"""
-        # dequeとsetのサイズが一致しない場合、setを再構築
-        if len(self.processed_tweets_set) != len(self.processed_tweets):
-            self.processed_tweets_set = set(self.processed_tweets)
-            logger.debug("🔧 Synchronized processed_tweets_set with deque")
+        # 上限を超えた場合、最も古いエントリから削除
+        while len(self.processed_tweets) > MAX_PROCESSED_TWEETS:
+            oldest_tweet_id = next(iter(self.processed_tweets))
+            del self.processed_tweets[oldest_tweet_id]
+            logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
 
         # 処理済みツイート数が上限の90%に達した場合に警告ログを出力
         if len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD:
             logger.info(f"📊 Current processed tweets: {len(self.processed_tweets)}/{MAX_PROCESSED_TWEETS}")
+
+    def cleanup_old_processed_tweets(self) -> None:
+        """パブリックなクリーンアップメソッド（後方互換性）"""
+        self._cleanup_old_processed_tweets()
 
     def get_status(self) -> Dict[str, Any]:
         """現在のステータス情報を取得"""

@@ -331,11 +331,11 @@ class ContentGenerator:
     def is_meat_related_tweet(self, text: str) -> bool:
         """お肉関連ツイートかどうか判定"""
         try:
-            # NGワードチェック（単語境界を考慮した精度の高い判定）
-            # 部分一致による誤検知を防ぐため、単語境界（\b）を使用
+            # NGワードチェック（日本語対応の単語境界を考慮した精度の高い判定）
+            # 部分一致による誤検知を防ぐため、日本語文字も含む単語境界を使用
             for ng_word in self.NG_KEYWORDS:
-                # 日本語の場合は前後に非文字（スペース、句読点等）がある場合のみマッチ
-                if re.search(rf'(?:^|[^\w]){re.escape(ng_word)}(?:[^\w]|$)', text):
+                # 日本語文字範囲も含めた単語境界パターンで判定
+                if re.search(rf'(?:^|[^\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]){re.escape(ng_word)}(?:[^\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]|$)', text):
                     logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
                     return False
 
