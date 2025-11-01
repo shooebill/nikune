@@ -113,21 +113,21 @@ class ContentGenerator:
 
         logger.info(f"✅ {self.bot_name} Content generator initialized")
 
-    def _compile_ng_pattern(self) -> Pattern[str]:
+    def _compile_ng_pattern(self) -> Optional[Pattern[str]]:
         """
         NGワードの正規表現パターンを1つにまとめてコンパイル
 
         Returns:
-            コンパイル済みの正規表現パターン
+            コンパイル済みの正規表現パターン（NGワード未設定時はNone）
 
         Raises:
             re.error: 正規表現のコンパイルに失敗した場合
             ValueError: NGキーワードが無効な場合
         """
         if not self.NG_KEYWORDS:
-            # NGワードが未設定の場合は全ツイートを許可するパターンを返す
+            # NGワードが未設定の場合はフィルタリングを無効化（Noneを返す）
             logger.info("NGキーワードが未設定のため、NGワードフィルタリングをスキップします")
-            return re.compile(r"(?!.*)")
+            return None
 
         # NGワード本体をエスケープして'|'で連結
         words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS]

@@ -328,8 +328,8 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
                 logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
                 logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
 
-                if results.get("errors"):
-                    errors = results.get("errors", [])
+                errors = results.get("errors")
+                if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
                     for error in errors:
                         logger.warning(f"      - {error}")

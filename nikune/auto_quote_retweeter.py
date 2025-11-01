@@ -55,7 +55,7 @@ class AutoQuoteRetweeter:
 
         # 処理済みツイートを追跡（重複防止）
         # OrderedDictで順序保持とO(1)検索を両立、サイズ管理も自動化
-        # TODO: これは redis で管理したい - アプリ再起動後も処理済み履歴を永続化
+        # 永続化についてはクラスdocstringの「重要な制限事項」を参照
         self.processed_tweets: OrderedDict[str, datetime] = OrderedDict()
 
         # レート制限管理（設定から取得）
@@ -237,7 +237,7 @@ class AutoQuoteRetweeter:
         mock_tweets = [
             SimpleNamespace(
                 id="mock_tweet_1",
-                text="本日も元気いっぱい11:00よりオープンです！もうご賞味頂けましたか⁉︎数量限定でさらに肉感アップしての登場です。ランチタイムならライス＆豚汁付き是非ご賞味くださいまんせい。#akiba",
+                text="本日も元気いっぱい11:00よりオープンです！もうご賞味頂けましたか⁉︎数量限定でさらに肉感アップしての登場です。ランチタイムならライス＆豚汁付き是非ご賞味くださいませ。#akiba",
                 author_id="mock_user_1",
                 created_at="2025-10-29T10:00:00.000Z",
             ),
