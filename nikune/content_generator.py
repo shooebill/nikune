@@ -7,7 +7,7 @@ import logging
 import random
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Pattern
+from typing import Any, Dict, Optional, Pattern
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -104,39 +104,40 @@ class ContentGenerator:
 
         # NGワード正規表現パターンを初期化時にコンパイル（パフォーマンス最適化）
         try:
-            self._ng_patterns = self._compile_ng_patterns()
+            self._ng_pattern: Optional[Pattern[str]] = self._compile_ng_pattern()
         except Exception as e:
-            logger.error(f"❌ Failed to compile NG patterns: {e}")
-            # フォールバック: 空のパターンリストを使用（NGワード機能を無効化）
-            self._ng_patterns = []
+            logger.error(f"❌ Failed to compile NG pattern: {e}")
+            # フォールバック: Noneを使用（NGワード機能を無効化）
+            self._ng_pattern = None
             logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")
 
         logger.info(f"✅ {self.bot_name} Content generator initialized")
 
-    def _compile_ng_patterns(self) -> List[Pattern[str]]:
+    def _compile_ng_pattern(self) -> Pattern[str]:
         """
-        NGワードの正規表現パターンを事前にコンパイル
+        NGワードの正規表現パターンを1つにまとめてコンパイル
 
         Returns:
-            コンパイル済みの正規表現パターンのリスト
+            コンパイル済みの正規表現パターン
 
         Raises:
             re.error: 正規表現のコンパイルに失敗した場合
             ValueError: NGキーワードが無効な場合
         """
-        patterns = []
-        for ng_word in self.NG_KEYWORDS:
-            # 前方境界: 行頭または単語境界（英数字・日本語以外の文字）
-            prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
-            # NGワード本体（エスケープ済み）
-            word = re.escape(ng_word)
-            # 後方境界: 単語境界または行末
-            suffix = rf"(?:{self.WORD_BOUNDARY_PATTERN}|$)"
-            # 全体パターンを組み立て
-            pattern = prefix + word + suffix
-            patterns.append(re.compile(pattern))
-        logger.debug(f"📋 Compiled {len(patterns)} NG word patterns")
-        return patterns
+        if not self.NG_KEYWORDS:
+            raise ValueError("NGキーワードが設定されていません")
+
+        # NGワード本体をエスケープして'|'で連結
+        words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS]
+
+        # 前方・後方境界を含めたパターンを組み立て
+        prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
+        suffix = rf"(?:{self.WORD_BOUNDARY_PATTERN}|$)"
+        pattern = prefix + "(?:" + "|".join(words) + ")" + suffix
+
+        compiled = re.compile(pattern)
+        logger.debug(f"📋 Compiled unified NG word pattern with {len(self.NG_KEYWORDS)} keywords")
+        return compiled
 
     def generate_tweet_content(self, category: Optional[str] = None, tone: Optional[str] = None) -> Optional[str]:
         """
@@ -371,19 +372,21 @@ class ContentGenerator:
     def is_meat_related_tweet(self, text: str) -> bool:
         """お肉関連ツイートかどうか判定"""
         try:
-            # NGワードチェック（事前コンパイル済みパターンを使用）
-            # パフォーマンス最適化のため、初期化時にコンパイルしたパターンを使用
-            for i, pattern in enumerate(self._ng_patterns):
-                if pattern.search(text):
-                    ng_word = self.NG_KEYWORDS[i]
-                    logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
-                    return False
+            # NGワードチェック（事前コンパイル済み統合パターンを使用）
+            # パフォーマンス最適化のため、初期化時にコンパイルした単一パターンを使用
+            if self._ng_pattern and self._ng_pattern.search(text):
+                logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
+                return False
 
             # お肉キーワードチェック
             # 部分一致で十分な理由: 「焼肉」「肉まん」「お肉」など「肉」を含む複合語も検出したいため、
             # NGワードと異なり単語境界は考慮しません。お肉関連の表現は多様で、
             # 包括的に検出することでより多くの関連ツイートをキャッチできます。
-            # ただし、キーワード数が非常に多い場合は線形検索となるため、パフォーマンスに注意してください。
+            #
+            # TODO: MEAT_KEYWORDSが大幅に増加した場合（100個以上など）は、
+            # NGワード同様に事前コンパイルした正規表現パターンの使用を検討してください。
+            # 現在の23個程度であれば線形検索でも問題ありませんが、
+            # 高頻度呼び出し時にキーワード数が多いとパフォーマンスに影響する可能性があります。
             return any(keyword in text for keyword in self.MEAT_KEYWORDS)
 
         except Exception as e:

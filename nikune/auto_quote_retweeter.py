@@ -270,8 +270,27 @@ class AutoQuoteRetweeter:
         can_quote = self._can_quote_now()
 
         next_available = None
-        if self.last_quote_time and not can_quote:
-            next_available = self.last_quote_time + timedelta(minutes=self.min_interval_minutes)
+        if not can_quote:
+            now = datetime.now()
+            # 最小間隔制限の解除時刻
+            min_interval_time = None
+            if self.last_quote_time:
+                min_interval_time = self.last_quote_time + timedelta(minutes=self.min_interval_minutes)
+
+            # 1時間制限の解除時刻
+            hour_limit_time = None
+            if (
+                hasattr(self, "quotes_in_last_hour")
+                and self.quotes_in_last_hour
+                and len(self.quotes_in_last_hour) >= self.max_quotes_per_hour
+            ):
+                oldest_quote_time = self.quotes_in_last_hour[0]
+                hour_limit_time = oldest_quote_time + timedelta(hours=1)
+
+            # 解除時刻候補のうち、未来のもののみを比較
+            candidates = [t for t in [min_interval_time, hour_limit_time] if t and t > now]
+            if candidates:
+                next_available = max(candidates)
 
         return {
             "can_quote_now": can_quote,
