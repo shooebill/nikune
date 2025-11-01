@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 class HealthChecker:
     """システム健全性チェッカー"""
 
-    def __init__(self) -> None:
+    def __init__(self, dry_run: bool = False) -> None:
         """ヘルスチェッカーを初期化"""
         self.bot_name = BOT_NAME
-        logger.info(f"✅ {self.bot_name} Health checker initialized")
+        self.dry_run = dry_run
+        mode = "dry run" if dry_run else "live"
+        logger.info(f"✅ {self.bot_name} Health checker initialized ({mode} mode)")
 
     def check_all_components(self) -> Dict[str, bool]:
         """
@@ -75,6 +77,10 @@ class HealthChecker:
     def _check_twitter_api(self) -> bool:
         """Twitter API接続の健全性をチェック"""
         try:
+            if self.dry_run:
+                logger.info("✅ Twitter API: Mock connection successful (dry run)")
+                return True
+                
             client = TwitterClient()
             if client.test_connection():
                 logger.info("✅ Twitter API: Connection successful")
@@ -154,12 +160,17 @@ class HealthChecker:
 
 
 # テスト用関数
-def test_health_checker() -> None:
+def test_health_checker(dry_run: bool = True) -> None:
     """ヘルスチェッカーのテスト実行"""
     print(f"🐻 {BOT_NAME} Health checker test starting...")
 
     try:
-        checker = HealthChecker()
+        checker = HealthChecker(dry_run=dry_run)
+        if dry_run:
+            print("🎭 Running health check in DRY RUN mode")
+        else:
+            print("⚠️ Running health check in LIVE mode")
+            
         checker.run_diagnostic()
         print("🎉 Health checker test completed successfully!")
 
@@ -168,4 +179,4 @@ def test_health_checker() -> None:
 
 
 if __name__ == "__main__":
-    test_health_checker()
+    test_health_checker(dry_run=True)  # デフォルトはドライラン

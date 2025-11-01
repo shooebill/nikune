@@ -205,24 +205,43 @@ class TwitterClient:
 
 
 # テスト用関数
-def test_twitter_client() -> None:
+def test_twitter_client(dry_run: bool = True) -> None:
     """Twitter クライアントのテスト実行"""
     print(f"🐻 {BOT_NAME} Twitter client test starting...")
 
-    # クライアント作成
-    client = TwitterClient()
-
-    # 接続テスト
-    if client.test_connection():
-        print("🎉 Twitter API connection successful!")
-
-        # テストツイート（コメントアウト推奨）
-        # test_tweet = "🐻 nikune bot test - お肉の魅力をお届けします！"
-        # client.post_tweet(test_tweet)
-
+    if dry_run:
+        print("🎭 Running in DRY RUN mode - no API calls will be made")
+        # ドライランモードでクライアント作成
+        client = TwitterClient(dry_run=True)
+        
+        # ドライランでの基本テスト
+        print("✅ Twitter client initialized in dry run mode")
+        print("✅ Mock connection test passed")
+        
+        # モック投稿テスト
+        test_tweet = "🐻 nikune bot test - お肉の魅力をお届けします！"
+        result = client.post_tweet(test_tweet)
+        if result:
+            print(f"✅ Mock tweet posted: {result}")
+        else:
+            print("❌ Mock tweet posting failed")
+            
     else:
-        print("❌ Twitter API connection failed!")
+        print("⚠️ Running in LIVE mode - real API calls will be made")
+        # ライブモードでクライアント作成
+        client = TwitterClient(dry_run=False)
+
+        # 接続テスト
+        if client.test_connection():
+            print("🎉 Twitter API connection successful!")
+
+            # テストツイート（コメントアウト推奨）
+            # test_tweet = "🐻 nikune bot test - お肉の魅力をお届けします！"
+            # client.post_tweet(test_tweet)
+
+        else:
+            print("❌ Twitter API connection failed!")
 
 
 if __name__ == "__main__":
-    test_twitter_client()
+    test_twitter_client(dry_run=True)  # デフォルトはドライラン

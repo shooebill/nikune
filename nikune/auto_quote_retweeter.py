@@ -4,6 +4,7 @@ nikune bot auto quote retweeter
 """
 
 import logging
+import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,8 @@ from config.settings import (
     BOT_NAME,
     QUOTE_RETWEET_MAX_PER_HOUR,
     QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
+    QUOTE_RETWEET_MIN_PRIORITY_SCORE,
+    QUOTE_RETWEET_HIGH_PRIORITY_LIMIT,
 )
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
@@ -27,6 +30,7 @@ CLEANUP_WARNING_COUNT = int(
 # Twitter API Rate Limit対策
 API_RETRY_DELAY_SECONDS = 60  # API エラー後の待機時間（秒）
 MAX_TIMELINE_FETCH_RETRIES = 2  # タイムライン取得の最大リトライ回数
+API_BACKOFF_MULTIPLIER = 2  # バックオフ倍率（指数的バックオフ）
 
 # ログ設定
 logger = logging.getLogger(__name__)
@@ -65,6 +69,11 @@ class AutoQuoteRetweeter:
         self.min_interval_minutes = QUOTE_RETWEET_MIN_INTERVAL_MINUTES
         self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
+
+        # 優先度システム設定
+        self.min_priority_score = QUOTE_RETWEET_MIN_PRIORITY_SCORE
+        self.high_priority_limit = QUOTE_RETWEET_HIGH_PRIORITY_LIMIT
+        self.high_priority_quotes_in_hour: List[datetime] = []
 
         # 自分のユーザーIDをキャッシュ（遅延初期化でRate Limit対策）
         self.my_user_id: Optional[str] = None
@@ -133,13 +142,11 @@ class AutoQuoteRetweeter:
                 timeline_tweets = self._get_mock_timeline()
                 logger.info("🎭 Using mock timeline data for dry run")
             else:
-                try:
-                    timeline_tweets = self.twitter_client.get_home_timeline(max_results=20) or []
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to get timeline (possibly rate limited): {e}")
-                    logger.info("📝 Skipping this check due to API error")
+                timeline_tweets = self._fetch_timeline_with_retry()
+                if timeline_tweets is None:
+                    # リトライ後も失敗した場合
                     results["success"] = True
-                    results["errors"].append(f"Timeline fetch failed: {e}")
+                    results["errors"].append("Timeline fetch failed after retries")
                     return results
 
             if not timeline_tweets:
@@ -164,16 +171,34 @@ class AutoQuoteRetweeter:
                     if self._is_own_tweet(tweet):
                         continue
 
-                    # お肉関連ツイートかチェック
-                    if self.content_generator.is_meat_related_tweet(tweet.text):
+                    # お肉関連ツイートかチェック（優先度スコアリング対応）
+                    score_info = self.content_generator.get_meat_keyword_score(tweet.text)
+                    
+                    if score_info["is_meat_related"]:
                         results["meat_related_found"] += 1
+                        priority_level = score_info["highest_priority_level"]
+                        score = score_info["score"]
+                        keywords = score_info["matched_keywords"]
+                        
                         logger.info(f"🥩 Found meat-related tweet: {tweet.id}")
-                        logger.info(f"📝 Content: {tweet.text[:100]}...")
+                        logger.info(f"� Priority: {priority_level} (Score: {score})")
+                        logger.info(f"🔍 Keywords: {keywords}")
+                        logger.info(f"�📝 Content: {tweet.text[:100]}...")
 
-                        # コメント生成
+                        # 優先度フィルタリング
+                        if score < self.min_priority_score:
+                            logger.info(f"⏭️ Skipping low priority tweet (Score: {score} < {self.min_priority_score})")
+                            continue
+
+                        # 高優先度ツイートのレート制限チェック
+                        if score >= 3 and not self._can_quote_high_priority():
+                            logger.info(f"⏰ High priority rate limit reached, skipping tweet (Score: {score})")
+                            continue
+
+                        # コメント生成（優先度対応版）
                         comment = self.content_generator.generate_quote_comment(tweet.text)
 
-                        if dry_run:
+                        if dry_run or self.dry_run:
                             logger.info(f"🔄 [DRY RUN] Would quote tweet with comment: {comment}")
                         else:
                             # Quote Tweet実行
@@ -182,14 +207,24 @@ class AutoQuoteRetweeter:
                                 results["quote_posted"] += 1
                                 self.last_quote_time = datetime.now()
                                 self.quotes_in_last_hour.append(self.last_quote_time)
+                                
+                                # 高優先度ツイートの記録
+                                if score >= 3:
+                                    self.high_priority_quotes_in_hour.append(self.last_quote_time)
+                                    
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
 
                         # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録）
                         self.processed_tweets[tweet.id] = datetime.now()
                         self._cleanup_old_processed_tweets()
 
-                        # 1回の実行で1件のみ処理（スパム防止）
-                        break
+                        # 優先度の高いツイートはすぐに処理、低いものは条件によりスキップ
+                        if score >= 3:  # HIGH priority
+                            logger.info("🎯 High priority tweet processed - continuing search for more")
+                            # 高優先度の場合は処理後も続行（次のツイートもチェック）
+                        else:
+                            # 中・低優先度の場合は1件処理したら終了（従来通り）
+                            break
 
                 except Exception as e:
                     error_msg = f"Error processing tweet {tweet.id}: {e}"
@@ -226,9 +261,52 @@ class AutoQuoteRetweeter:
 
         return len(self.quotes_in_last_hour) < self.max_quotes_per_hour
 
+    def _can_quote_high_priority(self) -> bool:
+        """高優先度Quote Tweetが可能かどうかチェック"""
+        now = datetime.now()
+        one_hour_ago = now - timedelta(hours=1)
+        
+        # 高優先度ツイートの履歴をクリーンアップ
+        self.high_priority_quotes_in_hour = [qt for qt in self.high_priority_quotes_in_hour if qt > one_hour_ago]
+        
+        return len(self.high_priority_quotes_in_hour) < self.high_priority_limit
+
+    def _fetch_timeline_with_retry(self) -> Optional[List[Any]]:
+        """リトライ機能付きタイムライン取得（指数的バックオフ）"""
+        max_retries = MAX_TIMELINE_FETCH_RETRIES
+        base_delay = API_RETRY_DELAY_SECONDS
+
+        for attempt in range(max_retries + 1):
+            try:
+                timeline_tweets = self.twitter_client.get_home_timeline(max_results=20)
+                if timeline_tweets is not None:
+                    return timeline_tweets
+                    
+                logger.warning(f"⚠️ Timeline fetch returned None (attempt {attempt + 1}/{max_retries + 1})")
+                
+            except Exception as e:
+                error_msg = f"Timeline fetch error (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                logger.warning(f"⚠️ {error_msg}")
+                
+                if attempt < max_retries:
+                    # 指数的バックオフで待機
+                    delay = base_delay * (API_BACKOFF_MULTIPLIER ** attempt)
+                    logger.info(f"⏰ Retrying after {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"❌ Timeline fetch failed after {max_retries + 1} attempts")
+                    return None
+        
+        return None
+
     def _is_own_tweet(self, tweet: Any) -> bool:
         """自分のツイートかどうかチェック（遅延初期化でRate Limit対策）"""
         try:
+            # ドライランモードの場合は自分のツイート判定をスキップ
+            if self.dry_run:
+                logger.debug("🎭 Dry run mode: skipping own tweet check")
+                return False
+            
             # 遅延初期化: 必要な時のみユーザーIDを取得
             if self.my_user_id is None and not self._user_id_fetch_attempted:
                 self._user_id_fetch_attempted = True
@@ -344,27 +422,38 @@ class AutoQuoteRetweeter:
             "quotes_in_last_hour": len(self.quotes_in_last_hour),
             "max_quotes_per_hour": self.max_quotes_per_hour,
             "min_interval_minutes": self.min_interval_minutes,
+            "priority_system": {
+                "min_priority_score": self.min_priority_score,
+                "high_priority_limit": self.high_priority_limit,
+                "high_priority_quotes_in_hour": len(self.high_priority_quotes_in_hour),
+                "can_quote_high_priority": self._can_quote_high_priority(),
+            },
         }
 
 
 # テスト用関数
-def test_auto_quote_retweeter() -> None:
+def test_auto_quote_retweeter(dry_run: bool = True) -> None:
     """Auto Quote Retweeter のテスト実行"""
     print(f"🐻 {BOT_NAME} Auto Quote Retweeter test starting...")
 
     try:
         # データベース接続
         with DatabaseManager() as db_manager:
-            # Auto Quote Retweeter 作成
-            retweeter = AutoQuoteRetweeter(db_manager)
+            # Auto Quote Retweeter 作成（ドライランモード対応）
+            retweeter = AutoQuoteRetweeter(db_manager, dry_run=dry_run)
+
+            if dry_run:
+                print("🎭 Running in DRY RUN mode")
+            else:
+                print("⚠️ Running in LIVE mode")
 
             # ステータス表示
             status = retweeter.get_status()
             print(f"📊 Status: {status}")
 
-            # ドライランテスト
-            print("🔄 Running dry run test...")
-            results = retweeter.check_and_quote_tweets(dry_run=True)
+            # テスト実行
+            print("🔄 Running test...")
+            results = retweeter.check_and_quote_tweets(dry_run=dry_run)
             print(f"✅ Test results: {results}")
 
     except Exception as e:
@@ -372,4 +461,4 @@ def test_auto_quote_retweeter() -> None:
 
 
 if __name__ == "__main__":
-    test_auto_quote_retweeter()
+    test_auto_quote_retweeter(dry_run=True)  # デフォルトはドライラン

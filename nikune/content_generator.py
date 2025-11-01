@@ -8,7 +8,7 @@ import random
 import re
 import textwrap
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -22,36 +22,30 @@ logger = logging.getLogger(__name__)
 class ContentGenerator:
     """コンテンツ生成クラス"""
 
-    # お肉関連キーワード（クラス定数）
-    MEAT_KEYWORDS = [
-        "肉",
-        "お肉",
-        "焼肉",
-        "ステーキ",
-        "ハンバーグ",
-        "すき焼き",
-        "しゃぶしゃぶ",
-        "牛肉",
-        "豚肉",
-        "鶏肉",
-        "ラム肉",
-        "ジンギスカン",
-        "バーベキュー",
-        "BBQ",
-        "焼き鳥",
-        "唐揚げ",
-        "とんかつ",
-        "牛丼",
-        "豚丼",
-        "焼き豚",
-        "ローストビーフ",
-        "ミートボール",
-        "ハンバーガー",
-        "チキン",
-        "ポーク",
-        "ビーフ",
-        "肉汁",
-    ]
+    # お肉関連キーワード（優先度別分類）
+    # 優先度: HIGH(3) > MEDIUM(2) > LOW(1)
+    MEAT_KEYWORDS_PRIORITY = {
+        "HIGH": {
+            "keywords": ["ステーキ", "焼肉", "すき焼き", "しゃぶしゃぶ", "ジンギスカン"],
+            "priority": 3,
+            "description": "高品質・特別なお肉料理"
+        },
+        "MEDIUM": {
+            "keywords": ["肉", "お肉", "牛肉", "豚肉", "鶏肉", "ラム肉", "ハンバーグ", "バーベキュー", "BBQ", "ローストビーフ"],
+            "priority": 2,
+            "description": "一般的なお肉料理・食材"
+        },
+        "LOW": {
+            "keywords": ["焼き鳥", "唐揚げ", "とんかつ", "牛丼", "豚丼", "焼き豚", "ミートボール", "ハンバーガー", "チキン", "ポーク", "ビーフ", "肉汁"],
+            "priority": 1,
+            "description": "日常的なお肉料理・カジュアル"
+        }
+    }
+
+    # 後方互換性のため、従来のMEAT_KEYWORDSも維持
+    MEAT_KEYWORDS = []
+    for priority_data in MEAT_KEYWORDS_PRIORITY.values():
+        MEAT_KEYWORDS.extend(priority_data["keywords"])
 
     # NGワード（設定ファイルから読み込み）
     NG_KEYWORDS = NG_KEYWORDS
@@ -112,6 +106,15 @@ class ContentGenerator:
             self._ng_pattern = None
             logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")
 
+        # お肉キーワードの正規表現パターンを事前コンパイル（パフォーマンス最適化v2）
+        try:
+            self._meat_patterns: Dict[str, re.Pattern[str]] = self._compile_meat_patterns()
+            logger.info("✅ Meat keyword patterns pre-compiled for better performance")
+        except Exception as e:
+            logger.error(f"❌ Failed to compile meat patterns: {e}")
+            self._meat_patterns = {}
+            logger.warning("⚠️ Using fallback string matching for meat keywords")
+
         logger.info(f"✅ {self.bot_name} Content generator initialized")
 
     def _compile_ng_pattern(self) -> Optional[re.Pattern[str]]:
@@ -141,6 +144,37 @@ class ContentGenerator:
         compiled = re.compile(pattern)
         logger.debug(f"📋 Compiled unified NG word pattern with {len(self.NG_KEYWORDS)} keywords")
         return compiled
+
+    def _compile_meat_patterns(self) -> Dict[str, re.Pattern[str]]:
+        """
+        お肉キーワードの正規表現パターンを優先度別に事前コンパイル
+
+        Returns:
+            優先度レベル別のコンパイル済み正規表現パターン辞書
+
+        Raises:
+            re.error: 正規表現のコンパイルに失敗した場合
+        """
+        compiled_patterns = {}
+
+        for level, priority_data in self.MEAT_KEYWORDS_PRIORITY.items():
+            keywords = priority_data["keywords"]
+            if not keywords:
+                continue
+
+            # キーワードをエスケープして'|'で連結（部分一致のため境界は不要）
+            escaped_keywords = [re.escape(keyword) for keyword in keywords]
+            pattern_str = "|".join(escaped_keywords)
+            
+            try:
+                compiled_pattern = re.compile(pattern_str, re.IGNORECASE)
+                compiled_patterns[level] = compiled_pattern
+                logger.debug(f"📋 Compiled {level} priority pattern with {len(keywords)} keywords")
+            except re.error as e:
+                logger.error(f"❌ Failed to compile {level} priority pattern: {e}")
+                # 個別パターンでエラーが発生しても他のレベルは続行
+
+        return compiled_patterns
 
     def generate_tweet_content(self, category: Optional[str] = None, tone: Optional[str] = None) -> Optional[str]:
         """
@@ -402,39 +436,179 @@ class ContentGenerator:
             logger.error(f"❌ Error checking meat keywords: {e}")
             return False
 
-    def generate_quote_comment(self, original_tweet_text: str) -> str:
-        """お肉関連ツイート用のコメント生成"""
+    def get_meat_keyword_score(self, text: str) -> Dict[str, Any]:
+        """
+        お肉関連ツイートの優先度スコアを計算（正規表現最適化版）
+
+        Args:
+            text (str): 判定対象のツイート本文
+
+        Returns:
+            Dict[str, Any]: スコア情報を含む辞書
+                - is_meat_related: bool - お肉関連かどうか
+                - score: int - 優先度スコア（0-3、3が最高）
+                - matched_keywords: List[str] - マッチしたキーワードリスト
+                - highest_priority_level: str - 最高優先度レベル
+        """
         try:
-            # 優先度順でキーワードマッチング（最初にマッチしたものを使用）
-            for keyword, comments in self.SPECIFIC_KEYWORD_COMMENTS:
-                if keyword in original_tweet_text:
-                    base_comment = random.choice(comments)
-                    break
+            # NGワードチェック（事前コンパイル済み正規表現使用）
+            if self._ng_pattern and self._ng_pattern.search(text):
+                logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
+                return {
+                    "is_meat_related": False,
+                    "score": 0,
+                    "matched_keywords": [],
+                    "highest_priority_level": "NONE",
+                    "ng_word_detected": True
+                }
+
+            matched_keywords = []
+            max_priority = 0
+            highest_priority_level = "NONE"
+
+            # 事前コンパイル済み正規表現を使用（パフォーマンス向上）
+            if self._meat_patterns:
+                # 最適化版: 正規表現パターンマッチング
+                for level, pattern in self._meat_patterns.items():
+                    matches = pattern.findall(text)
+                    if matches:
+                        priority_data = self.MEAT_KEYWORDS_PRIORITY[level]
+                        priority = priority_data["priority"]
+                        matched_keywords.extend(matches)
+                        
+                        if priority > max_priority:
+                            max_priority = priority
+                            highest_priority_level = level
             else:
-                # デフォルトのnikune風コメントテンプレート
-                base_comment = random.choice(self.DEFAULT_QUOTE_COMMENTS)
+                # フォールバック版: 文字列検索
+                logger.debug("🔄 Using fallback string matching for meat keywords")
+                for level, priority_data in self.MEAT_KEYWORDS_PRIORITY.items():
+                    keywords = priority_data["keywords"]
+                    priority = priority_data["priority"]
+
+                    for keyword in keywords:
+                        if keyword in text:
+                            matched_keywords.append(keyword)
+                            if priority > max_priority:
+                                max_priority = priority
+                                highest_priority_level = level
+
+            is_meat_related = len(matched_keywords) > 0
+            
+            if is_meat_related:
+                logger.debug(f"🥩 Meat keywords detected: {matched_keywords} (Priority: {highest_priority_level}, Score: {max_priority})")
+
+            return {
+                "is_meat_related": is_meat_related,
+                "score": max_priority,
+                "matched_keywords": list(set(matched_keywords)),  # 重複除去
+                "highest_priority_level": highest_priority_level,
+                "ng_word_detected": False
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error calculating meat keyword score: {e}")
+            return {
+                "is_meat_related": False,
+                "score": 0,
+                "matched_keywords": [],
+                "highest_priority_level": "NONE",
+                "ng_word_detected": False
+            }
+
+    def generate_quote_comment(self, original_tweet_text: str) -> str:
+        """お肉関連ツイート用のコメント生成（優先度対応版）"""
+        try:
+            # キーワードの優先度スコアを取得
+            score_info = self.get_meat_keyword_score(original_tweet_text)
+            
+            if not score_info["is_meat_related"]:
+                logger.warning("⚠️ Trying to generate comment for non-meat-related tweet")
+                return "🐻 お肉〜！"  # フォールバック
+
+            # 優先度レベルに基づいてコメント選択
+            base_comment = self._select_comment_by_priority(
+                score_info["highest_priority_level"],
+                score_info["matched_keywords"],
+                original_tweet_text
+            )
 
             # 時間帯に応じた追加コメント
             current_hour = datetime.now().hour
-
-            if self.MORNING_START <= current_hour < self.MORNING_END:
-                time_comment = " 朝からお肉いいですね〜"
-            elif self.LUNCH_START <= current_hour < self.LUNCH_END:
-                time_comment = " お昼のお肉タイム！"
-            elif self.DINNER_START <= current_hour < self.DINNER_END:
-                time_comment = " 夕食が楽しみになります！"
-            else:
-                time_comment = ""
+            time_comment = self._get_time_based_comment(current_hour, score_info["score"])
 
             final_comment = base_comment + time_comment
 
             logger.info(f"✅ Generated quote comment: {final_comment}")
-            logger.info(f"📝 Based on original text: {original_tweet_text[:50]}...")
+            logger.info(f"📝 Priority: {score_info['highest_priority_level']} (Score: {score_info['score']})")
+            logger.info(f"📝 Keywords: {score_info['matched_keywords']}")
+            logger.info(f"📝 Based on: {original_tweet_text[:50]}...")
             return final_comment
 
         except Exception as e:
             logger.error(f"❌ Error generating quote comment: {e}")
             return "🐻 お肉〜！"  # フォールバック
+
+    def _select_comment_by_priority(self, priority_level: str, matched_keywords: list, original_text: str) -> str:
+        """優先度レベルに基づいてコメントを選択"""
+        try:
+            # 高優先度キーワード用の特別なコメント
+            if priority_level == "HIGH":
+                high_priority_comments = [
+                    "🥩✨ 素晴らしいお肉料理ですね！",
+                    "😍 高級感あふれるお肉！羨ましいです！",
+                    "🐻💕 これは贅沢なお肉ですね〜",
+                    "🔥 最高級のお肉！とても美味しそう！",
+                    "🥩👑 特別なお肉料理に感動です！"
+                ]
+                return random.choice(high_priority_comments)
+
+            # 特定キーワードに対する専用コメント
+            for keyword, comments in self.SPECIFIC_KEYWORD_COMMENTS:
+                if keyword in matched_keywords:
+                    return random.choice(comments)
+
+            # 中優先度用のコメント
+            if priority_level == "MEDIUM":
+                medium_priority_comments = [
+                    "🥩 美味しそうなお肉ですね！",
+                    "🐻 お肉愛が伝わってきます！",
+                    "😋 これは食べてみたいです〜",
+                    "🍴 素敵なお肉料理ですね！",
+                    "🥩🔥 お肉最高！"
+                ]
+                return random.choice(medium_priority_comments)
+
+            # 低優先度・デフォルト用のコメント
+            return random.choice(self.DEFAULT_QUOTE_COMMENTS)
+
+        except Exception as e:
+            logger.error(f"❌ Error selecting comment by priority: {e}")
+            return random.choice(self.DEFAULT_QUOTE_COMMENTS)
+
+    def _get_time_based_comment(self, current_hour: int, priority_score: int) -> str:
+        """時間帯と優先度に基づいて追加コメントを生成"""
+        try:
+            base_time_comment = ""
+
+            if self.MORNING_START <= current_hour < self.MORNING_END:
+                base_time_comment = " 朝からお肉いいですね〜"
+            elif self.LUNCH_START <= current_hour < self.LUNCH_END:
+                base_time_comment = " お昼のお肉タイム！"
+            elif self.DINNER_START <= current_hour < self.DINNER_END:
+                base_time_comment = " 夕食が楽しみになります！"
+            else:
+                # 夜間や早朝の場合、優先度が高ければ特別コメント
+                if priority_score >= 3:
+                    base_time_comment = " 特別なお肉ですね〜！"
+                elif priority_score >= 2:
+                    base_time_comment = " お肉好きにはたまらないです！"
+
+            return base_time_comment
+
+        except Exception as e:
+            logger.error(f"❌ Error generating time-based comment: {e}")
+            return ""
 
 
 # テスト用関数

@@ -115,7 +115,12 @@ All core functionalities implemented and tested:
 
 Ready for production deployment! 🐻🍖
 
-### Recent Updates
+### Recent Updates (v2 - Priority System)
+- **🆕 Keyword Priority System**: 3-tier priority scoring (HIGH/MEDIUM/LOW) for intelligent tweet filtering
+- **🆕 Smart Comment Generation**: Priority-based comment selection with enhanced personalization
+- **🆕 High Priority Rate Limiting**: Separate rate limits for premium content (3 high-priority/hour)
+- **🆕 Performance Optimization**: Pre-compiled regex patterns for faster keyword detection
+- **🆕 Advanced Error Handling**: Robust retry logic with exponential backoff
 - **Auto Quote Retweet System**: Detects meat-related tweets and adds thoughtful comments
 - **Mock Timeline for Testing**: API-free testing with realistic mock data
 - **Enhanced Rate Limiting**: Prevents Twitter API violations with smart throttling

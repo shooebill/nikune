@@ -434,24 +434,36 @@ class SchedulerManager:
         self.close()
 
 
-def test_scheduler() -> None:
+def test_scheduler(dry_run: bool = True) -> None:
     """スケジューラーのテスト実行"""
     print(f"🐻 {BOT_NAME} Scheduler test starting...")
 
     try:
-        with SchedulerManager() as scheduler:
-            # 接続テスト
-            if scheduler.twitter_client.test_connection():
-                print("✅ Twitter connection: OK")
+        with SchedulerManager(dry_run=dry_run) as scheduler:
+            if dry_run:
+                print("🎭 Running in DRY RUN mode - no actual posts will be made")
+            else:
+                print("⚠️ Running in LIVE mode - real posts will be made")
+
+            # 接続テスト（ドライランモードでは実際の接続テストをスキップ）
+            if not dry_run:
+                if scheduler.twitter_client.test_connection():
+                    print("✅ Twitter connection: OK")
+            else:
+                print("✅ Mock Twitter connection: OK (dry run)")
 
             # コンテンツ生成テスト
             content = scheduler.content_generator.generate_tweet_content()
             if content:
                 print(f"✅ Content generation: OK - {content}")
 
-            # 即座投稿テスト（実際には投稿しない）
-            print("📤 Testing immediate post (dry run)...")
-            # result = scheduler.post_now()  # コメントアウト（実際の投稿を避けるため）
+            # 即座投稿テスト
+            if dry_run:
+                print("📤 Testing immediate post (dry run)...")
+                print("✅ Mock post successful (would have posted in live mode)")
+            else:
+                print("📤 Testing immediate post (LIVE)...")
+                # result = scheduler.post_now()  # 実際の投稿（必要に応じてコメントアウト）
 
             # スケジュール設定テスト
             test_config = {
@@ -473,4 +485,4 @@ def test_scheduler() -> None:
 
 
 if __name__ == "__main__":
-    test_scheduler()
+    test_scheduler(dry_run=True)  # デフォルトはドライラン
