@@ -125,7 +125,9 @@ class ContentGenerator:
             ValueError: NGキーワードが無効な場合
         """
         if not self.NG_KEYWORDS:
-            raise ValueError("NGキーワードが設定されていません")
+            # NGワードが未設定の場合は全ツイートを許可するパターンを返す
+            logger.info("NGキーワードが未設定のため、NGワードフィルタリングをスキップします")
+            return re.compile(r"(?!.*)")
 
         # NGワード本体をエスケープして'|'で連結
         words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS]
@@ -370,23 +372,29 @@ class ContentGenerator:
         self.close()
 
     def is_meat_related_tweet(self, text: str) -> bool:
-        """お肉関連ツイートかどうか判定"""
+        """
+        お肉関連ツイートかどうか判定する。
+
+        仕様:
+            - まずNGワードフィルタリング（事前コンパイル済み正規表現パターン）を先に実行し、NGワードが含まれていればFalseを返す。
+            - NGワードに該当しない場合、「お肉」関連キーワード（self.MEAT_KEYWORDS）を部分一致で検出する。
+                - 部分一致とする理由は、「焼肉」「肉まん」「お肉」など「肉」を含む複合語も検出したいため。
+                - NGワードと異なり単語境界は考慮しない。
+            - MEAT_KEYWORDSが大幅に増加した場合は、パフォーマンスのため正規表現パターンの事前コンパイルを検討すること。
+
+        Args:
+            text (str): 判定対象のツイート本文
+
+        Returns:
+            bool: お肉関連ツイートの場合True、そうでなければFalse
+        """
         try:
-            # NGワードチェック（事前コンパイル済み統合パターンを使用）
-            # パフォーマンス最適化のため、初期化時にコンパイルした単一パターンを使用
+            # NGワードチェック
             if self._ng_pattern and self._ng_pattern.search(text):
                 logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
                 return False
 
-            # お肉キーワードチェック
-            # 部分一致で十分な理由: 「焼肉」「肉まん」「お肉」など「肉」を含む複合語も検出したいため、
-            # NGワードと異なり単語境界は考慮しません。お肉関連の表現は多様で、
-            # 包括的に検出することでより多くの関連ツイートをキャッチできます。
-            #
-            # TODO: MEAT_KEYWORDSが大幅に増加した場合（100個以上など）は、
-            # NGワード同様に事前コンパイルした正規表現パターンの使用を検討してください。
-            # 現在の23個程度であれば線形検索でも問題ありませんが、
-            # 高頻度呼び出し時にキーワード数が多いとパフォーマンスに影響する可能性があります。
+            # お肉キーワード部分一致チェック
             return any(keyword in text for keyword in self.MEAT_KEYWORDS)
 
         except Exception as e:

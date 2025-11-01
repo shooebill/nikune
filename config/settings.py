@@ -30,8 +30,18 @@ ACTIVE_HOURS_END = 21  # 21時まで
 QUOTE_RETWEET_MIN_INTERVAL_MINUTES = int(os.getenv("QUOTE_RETWEET_MIN_INTERVAL_MINUTES", "30"))
 QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
 
-# NGワードリスト（外部設定化）
-NG_KEYWORDS = ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+# NGワードリスト（環境変数または設定ファイルから読み込み）
+def _load_ng_keywords() -> list[str]:
+    """NGワードリストを環境変数から読み込み（カンマ区切り）"""
+    env_ng_keywords = os.getenv("NG_KEYWORDS", "")
+    if env_ng_keywords:
+        return [keyword.strip() for keyword in env_ng_keywords.split(",") if keyword.strip()]
+    # デフォルト値（環境変数が未設定の場合）
+    return ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+
+NG_KEYWORDS = _load_ng_keywords()
 
 # 時間帯判定用設定（調整可能）
 TIME_SETTINGS = {

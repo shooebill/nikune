@@ -155,6 +155,9 @@ class TwitterClient:
                 return None
 
             # 文字数チェック（280文字制限 - 引用分を考慮）
+            # TODO: より正確な文字数カウントのため twitter-text-parser ライブラリの使用を検討
+            # 現在のlen()はUnicodeコードポイント単位だが、Twitterのカウントとは異なる場合がある
+            # 特に絵文字や結合文字を含む場合は注意が必要
             if len(comment) > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
                 logger.warning(f"Comment too long ({len(comment)} chars), truncating...")
                 comment = comment[:MAX_QUOTE_COMMENT_LENGTH - 3] + "..."  # fmt: skip
