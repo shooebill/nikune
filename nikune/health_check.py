@@ -80,7 +80,7 @@ class HealthChecker:
             if self.dry_run:
                 logger.info("✅ Twitter API: Mock connection successful (dry run)")
                 return True
-                
+
             client = TwitterClient()
             if client.test_connection():
                 logger.info("✅ Twitter API: Connection successful")
@@ -170,7 +170,7 @@ def test_health_checker(dry_run: bool = True) -> None:
             print("🎭 Running health check in DRY RUN mode")
         else:
             print("⚠️ Running health check in LIVE mode")
-            
+
         checker.run_diagnostic()
         print("🎉 Health checker test completed successfully!")
 

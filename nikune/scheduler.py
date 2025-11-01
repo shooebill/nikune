@@ -34,6 +34,7 @@ class SchedulerManager:
         db_manager: Optional[DatabaseManager] = None,
         content_generator: Optional[ContentGenerator] = None,
         twitter_client: Optional[TwitterClient] = None,
+        dry_run: bool = False,
     ):
         """
         スケジューラーマネージャーを初期化
@@ -42,16 +43,19 @@ class SchedulerManager:
             db_manager: データベースマネージャー（Noneの場合は新規作成）
             content_generator: コンテンツジェネレーター（Noneの場合は新規作成）
             twitter_client: Twitterクライアント（Noneの場合は新規作成）
+            dry_run: ドライランモード（実際の投稿を行わない）
         """
+        self.dry_run = dry_run
         self.db_manager = db_manager or DatabaseManager()
         self.content_generator = content_generator or ContentGenerator(self.db_manager)
-        self.twitter_client = twitter_client or TwitterClient()
-        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager)
+        self.twitter_client = twitter_client or TwitterClient(dry_run=dry_run)
+        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager, dry_run=dry_run)
 
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
 
-        logger.info(f"✅ {BOT_NAME} Scheduler manager initialized")
+        mode = "dry run" if dry_run else "live"
+        logger.info(f"✅ {BOT_NAME} Scheduler manager initialized ({mode} mode)")
 
     def setup_schedule(self, schedule_config: Optional[Dict[str, Any]] = None) -> None:
         """

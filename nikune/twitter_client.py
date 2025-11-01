@@ -213,11 +213,11 @@ def test_twitter_client(dry_run: bool = True) -> None:
         print("🎭 Running in DRY RUN mode - no API calls will be made")
         # ドライランモードでクライアント作成
         client = TwitterClient(dry_run=True)
-        
+
         # ドライランでの基本テスト
         print("✅ Twitter client initialized in dry run mode")
         print("✅ Mock connection test passed")
-        
+
         # モック投稿テスト
         test_tweet = "🐻 nikune bot test - お肉の魅力をお届けします！"
         result = client.post_tweet(test_tweet)
@@ -225,7 +225,7 @@ def test_twitter_client(dry_run: bool = True) -> None:
             print(f"✅ Mock tweet posted: {result}")
         else:
             print("❌ Mock tweet posting failed")
-            
+
     else:
         print("⚠️ Running in LIVE mode - real API calls will be made")
         # ライブモードでクライアント作成

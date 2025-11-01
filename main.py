@@ -54,14 +54,16 @@ def setup_sample_data(db_manager: DatabaseManager) -> bool:
         return False
 
 
-def test_all_components() -> bool:
+def test_all_components(dry_run: bool = False) -> bool:
     """全コンポーネントのテスト実行"""
     print(f"🐻 {BOT_NAME} - Full System Test")
+    if dry_run:
+        print("🎭 Running in DRY RUN mode")
     print("=" * 50)
 
     try:
         # ヘルスチェッカーを使用した包括的テスト
-        health_checker = HealthChecker()
+        health_checker = HealthChecker(dry_run=dry_run)
         health_results = health_checker.check_all_components()
 
         print("1. System Health Check...")
@@ -83,12 +85,15 @@ def test_all_components() -> bool:
 
         # Twitter接続テスト
         print("\n3. Testing Twitter API Connection...")
-        twitter_client = TwitterClient()
-        if twitter_client.test_connection():
-            print("✅ Twitter API: Connection successful")
+        if dry_run:
+            print("✅ Twitter API: Mock connection successful (dry run)")
         else:
-            print("❌ Twitter API: Connection failed")
-            return False
+            twitter_client = TwitterClient()
+            if twitter_client.test_connection():
+                print("✅ Twitter API: Connection successful")
+            else:
+                print("❌ Twitter API: Connection failed")
+                return False
 
         # コンテンツ生成テスト
         print("\n4. Testing Content Generation...")
@@ -103,7 +108,7 @@ def test_all_components() -> bool:
 
         # スケジューラーテスト
         print("\n5. Testing Scheduler...")
-        with SchedulerManager() as scheduler:
+        with SchedulerManager(dry_run=dry_run) as scheduler:
             # テスト用スケジュール設定
             test_config = {
                 "daily_posts": 1,
@@ -137,7 +142,7 @@ def post_now_command(
         print(f"🐻 {BOT_NAME} - Posting tweet now...")
 
     try:
-        with SchedulerManager() as scheduler:
+        with SchedulerManager(dry_run=dry_run) as scheduler:
             # カスタムテキストが指定された場合
             if text:
                 print(f"📝 Custom tweet: {text}")
@@ -433,9 +438,9 @@ def main() -> None:
         success = False
 
         if args.test:
-            success = test_all_components()
+            success = test_all_components(dry_run=args.dry_run)
         elif args.health:
-            health_checker = HealthChecker()
+            health_checker = HealthChecker(dry_run=args.dry_run)
             health_checker.run_diagnostic()
             success = True
         elif args.post_now:

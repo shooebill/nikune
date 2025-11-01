@@ -32,7 +32,9 @@ QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
 
 # 優先度システム設定
 QUOTE_RETWEET_MIN_PRIORITY_SCORE = int(os.getenv("QUOTE_RETWEET_MIN_PRIORITY_SCORE", "1"))  # 最低優先度スコア
-QUOTE_RETWEET_HIGH_PRIORITY_LIMIT = int(os.getenv("QUOTE_RETWEET_HIGH_PRIORITY_LIMIT", "3"))  # 高優先度の上限（1時間あたり）
+QUOTE_RETWEET_HIGH_PRIORITY_LIMIT = int(
+    os.getenv("QUOTE_RETWEET_HIGH_PRIORITY_LIMIT", "3")
+)  # 高優先度の上限（1時間あたり）
 
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）
