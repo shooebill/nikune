@@ -21,6 +21,8 @@ from nikune.twitter_client import TwitterClient
 # 定数定義
 MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
 MAINTENANCE_TASKS_COUNT = 1  # 現在のメンテナンスタスク数
+LOG_INDENT = "   "  # ログメッセージのインデント
+ERROR_INDENT = "      "  # エラーメッセージのインデント
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -203,20 +205,20 @@ class SchedulerManager:
 
             if results["success"]:
                 logger.info("✅ Quote check completed:")
-                logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
-                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
-                logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
+                logger.info(f"{LOG_INDENT}📊 Checked tweets: {results['checked_tweets']}")
+                logger.info(f"{LOG_INDENT}🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"{LOG_INDENT}🔄 Quote tweets posted: {results['quote_posted']}")
 
                 if results.get("skipped_rate_limit", 0) > 0:
-                    logger.info("   ⏰ Skipped due to rate limit")
+                    logger.info(f"{LOG_INDENT}⏰ Skipped due to rate limit")
 
                 errors = results.get("errors", [])
                 if errors:
-                    logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
+                    logger.warning(f"{LOG_INDENT}⚠️  Errors occurred: {len(errors)}")
                     for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初のMAX_ERRORS_TO_DISPLAY個のエラーのみ表示
-                        logger.warning(f"      - {error}")
+                        logger.warning(f"{ERROR_INDENT}- {error}")
                     if len(errors) > MAX_ERRORS_TO_DISPLAY:
-                        logger.warning(f"      ... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")
+                        logger.warning(f"{ERROR_INDENT}... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")
             else:
                 logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")
 

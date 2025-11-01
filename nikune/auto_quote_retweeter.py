@@ -4,6 +4,7 @@ nikune bot auto quote retweeter
 """
 
 import logging
+import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
@@ -63,6 +64,7 @@ class AutoQuoteRetweeter:
         # OrderedDictで順序保持とO(1)検索を両立、サイズ管理も自動化
         # 永続化についてはクラスdocstringの「重要な制限事項」を参照
         self.processed_tweets: OrderedDict[str, datetime] = OrderedDict()
+        self._processed_tweets_lock = threading.Lock()  # スレッドセーフティ確保
 
         # レート制限管理（設定から取得）
         self.last_quote_time: Optional[datetime] = None
@@ -101,7 +103,7 @@ class AutoQuoteRetweeter:
                     user_id = me.data.get("id")
                 else:
                     user_id = None
-                
+
                 if user_id is not None:
                     user_id = str(user_id)
                     logger.info(f"📋 Cached user ID: {user_id}")
@@ -168,11 +170,12 @@ class AutoQuoteRetweeter:
             skipped_processed = 0
             for tweet in timeline_tweets:
                 try:
-                    # 既に処理済みかチェック（OrderedDictでO(1)検索）
-                    if tweet.id in self.processed_tweets:
-                        skipped_processed += 1
-                        logger.debug(f"⏭️ Already processed tweet: {tweet.id}")
-                        continue
+                    # 既に処理済みかチェック（OrderedDictでO(1)検索・スレッドセーフ）
+                    with self._processed_tweets_lock:
+                        if tweet.id in self.processed_tweets:
+                            skipped_processed += 1
+                            logger.debug(f"⏭️ Already processed tweet: {tweet.id}")
+                            continue
 
                     # 自分のツイートは除外
                     if self._is_own_tweet(tweet):
@@ -221,8 +224,9 @@ class AutoQuoteRetweeter:
 
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
 
-                        # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録）
-                        self.processed_tweets[tweet.id] = datetime.now()
+                        # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録・スレッドセーフ）
+                        with self._processed_tweets_lock:
+                            self.processed_tweets[tweet.id] = datetime.now()
                         self._cleanup_old_processed_tweets()
 
                         # 優先度の高いツイートはすぐに処理、低いものは条件によりスキップ
@@ -373,15 +377,17 @@ class AutoQuoteRetweeter:
         return mock_tweets
 
     def _cleanup_old_processed_tweets(self) -> None:
-        """古い処理済みツイートIDを削除（メモリ管理）"""
-        # 上限を超えた場合、最も古いエントリから削除
-        while len(self.processed_tweets) > MAX_PROCESSED_TWEETS:
-            oldest_tweet_id = next(iter(self.processed_tweets))
-            del self.processed_tweets[oldest_tweet_id]
-            logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
+        """古い処理済みツイートIDを削除（メモリ管理・スレッドセーフ）"""
+        with self._processed_tweets_lock:
+            # 上限を超えた場合、最も古いエントリから削除
+            while len(self.processed_tweets) > MAX_PROCESSED_TWEETS:
+                oldest_tweet_id = next(iter(self.processed_tweets))
+                del self.processed_tweets[oldest_tweet_id]
+                logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
 
-        # 処理済みツイート数が上限の90%に達した場合に警告ログを出力（初回のみ）
-        threshold_reached = len(self.processed_tweets) >= CLEANUP_WARNING_COUNT
+            # 処理済みツイート数が上限の90%に達した場合に警告ログを出力（初回のみ）
+            threshold_reached = len(self.processed_tweets) >= CLEANUP_WARNING_COUNT
+
         if threshold_reached and not self._warning_logged:
             count = len(self.processed_tweets)
             logger.warning(f"⚠️ Processed tweets approaching limit: {count}/{MAX_PROCESSED_TWEETS}")

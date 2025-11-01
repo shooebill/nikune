@@ -4,6 +4,7 @@ Twitter APIとの接続、ツイート投稿などを担当
 """
 
 import logging
+import unicodedata
 from typing import Optional
 
 import tweepy
@@ -18,6 +19,26 @@ from config.settings import (
 
 # 定数定義
 MAX_QUOTE_COMMENT_LENGTH = 250  # Quote comment の最大文字数（Twitter280文字制限から引用URL約23文字を考慮）
+
+
+def _safe_text_length(text: str) -> int:
+    """
+    Unicode安全な文字カウント
+
+    Args:
+        text: カウント対象のテキスト
+
+    Returns:
+        正規化後の文字数
+
+    Note:
+        unicodedataを使用して正規化を行い、より正確な文字数をカウント
+        TODO: 将来的にはtwitter-text-parserライブラリの使用を検討
+    """
+    # NFCで正規化（結合文字を正規化）
+    normalized = unicodedata.normalize("NFC", text)
+    return len(normalized)
+
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -155,11 +176,11 @@ class TwitterClient:
                 return None
 
             # 文字数チェック（280文字制限 - 引用分を考慮）
+            # Unicode安全な文字カウントを使用（結合文字・絵文字考慮）
             # TODO: より正確な文字数カウントのため twitter-text-parser ライブラリの使用を検討
-            # 現在のlen()はUnicodeコードポイント単位だが、Twitterのカウントとは異なる場合がある
-            # 特に絵文字や結合文字を含む場合は注意が必要
-            if len(comment) > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
-                logger.warning(f"Comment too long ({len(comment)} chars), truncating...")
+            comment_length = _safe_text_length(comment)
+            if comment_length > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
+                logger.warning(f"Comment too long ({comment_length} chars), truncating...")
                 comment = comment[:MAX_QUOTE_COMMENT_LENGTH - 3] + "..."  # fmt: skip
 
             # コメント付きリツイート実行

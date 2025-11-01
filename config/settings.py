@@ -39,12 +39,30 @@ QUOTE_RETWEET_HIGH_PRIORITY_LIMIT = int(
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）
 def _load_ng_keywords() -> list[str]:
-    """NGワードリストを環境変数から読み込み（カンマ区切り）"""
+    """
+    NGワードリストを環境変数または設定ファイルから読み込みます。
+    優先順位:
+      1. 環境変数 NG_KEYWORDS（カンマ区切り）
+      2. 環境変数 NG_KEYWORDS_FILE で指定されたファイル
+      3. デフォルトファイル ng_keywords.txt
+
+    NGワードの選定基準・変更手順についてはREADMEを参照してください。
+    """
     env_ng_keywords = os.getenv("NG_KEYWORDS", "")
     if env_ng_keywords:
         return [keyword.strip() for keyword in env_ng_keywords.split(",") if keyword.strip()]
-    # デフォルト値（環境変数が未設定の場合）
-    return ["血", "殺", "死", "病気", "腐", "毒", "汚い", "嫌い"]
+
+    ng_keywords_file = os.getenv("NG_KEYWORDS_FILE", "ng_keywords.txt")
+    if os.path.isfile(ng_keywords_file):
+        with open(ng_keywords_file, encoding="utf-8") as f:
+            # 空行や#で始まる行は無視
+            return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+    # NGワードリストが未設定の場合は空リストを返す
+    print(
+        f"⚠️ NGワードリストが見つかりませんでした: {ng_keywords_file}。環境変数NG_KEYWORDSまたはファイルで設定してください。"
+    )
+    return []
 
 
 NG_KEYWORDS = _load_ng_keywords()

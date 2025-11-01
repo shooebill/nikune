@@ -19,6 +19,9 @@ from nikune.health_check import HealthChecker
 from nikune.scheduler import SchedulerManager
 from nikune.twitter_client import TwitterClient
 
+# 定数定義
+MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
+
 # ロガー設定
 logger = logging.getLogger(__name__)
 
@@ -336,8 +339,10 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
                 errors = results.get("errors", [])
                 if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
-                    for error in errors:
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:
                         logger.warning(f"      - {error}")
+                    if len(errors) > MAX_ERRORS_TO_DISPLAY:
+                        logger.warning(f"      ... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")
 
                 return True
             else:
