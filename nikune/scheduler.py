@@ -13,9 +13,16 @@ from typing import Any, Dict, List, Optional
 import schedule
 
 from config.settings import BOT_NAME
+from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.twitter_client import TwitterClient
+
+# 定数定義
+MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
+MAINTENANCE_TASKS_COUNT = 1  # 現在のメンテナンスタスク数
+LOG_INDENT = "   "  # ログメッセージのインデント
+ERROR_INDENT = "      "  # エラーメッセージのインデント
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -29,6 +36,7 @@ class SchedulerManager:
         db_manager: Optional[DatabaseManager] = None,
         content_generator: Optional[ContentGenerator] = None,
         twitter_client: Optional[TwitterClient] = None,
+        dry_run: bool = False,
     ):
         """
         スケジューラーマネージャーを初期化
@@ -37,15 +45,19 @@ class SchedulerManager:
             db_manager: データベースマネージャー（Noneの場合は新規作成）
             content_generator: コンテンツジェネレーター（Noneの場合は新規作成）
             twitter_client: Twitterクライアント（Noneの場合は新規作成）
+            dry_run: ドライランモード（実際の投稿を行わない）
         """
+        self.dry_run = dry_run
         self.db_manager = db_manager or DatabaseManager()
         self.content_generator = content_generator or ContentGenerator(self.db_manager)
-        self.twitter_client = twitter_client or TwitterClient()
+        self.twitter_client = twitter_client or TwitterClient(dry_run=dry_run)
+        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager, dry_run=dry_run)
 
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
 
-        logger.info(f"✅ {BOT_NAME} Scheduler manager initialized")
+        mode = "dry run" if dry_run else "live"
+        logger.info(f"✅ {BOT_NAME} Scheduler manager initialized ({mode} mode)")
 
     def setup_schedule(self, schedule_config: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -59,6 +71,7 @@ class SchedulerManager:
             default_config = {
                 "daily_posts": 3,
                 "post_times": ["09:00", "13:30", "19:00"],
+                "quote_check_times": ["10:30", "15:00", "21:00"],  # Quote Retweetチェック時間
                 "categories": [
                     "お肉",
                     "日常",
@@ -90,10 +103,20 @@ class SchedulerManager:
 
                 logger.info(f"📅 Scheduled tweet at {post_time}")
 
+            # Quote Retweetチェック時間を設定
+            quote_check_times: list[str] = config.get("quote_check_times", [])
+            for quote_time in quote_check_times:
+                schedule.every().day.at(quote_time).do(self._scheduled_quote_check)
+                logger.info(f"🔄 Scheduled quote retweet check at {quote_time}")
+
             # 定期メンテナンス（毎日深夜）
+            maintenance_tasks = MAINTENANCE_TASKS_COUNT
             schedule.every().day.at("03:00").do(self._daily_maintenance)
 
-            logger.info(f"✅ Schedule setup completed: {len(post_times)} daily posts")
+            logger.info(
+                f"✅ Schedule setup completed: {len(post_times)} posts, "
+                f"{len(quote_check_times)} quote checks, {maintenance_tasks} maintenance"
+            )
 
         except Exception as e:
             logger.error(f"❌ Failed to setup schedule: {e}")
@@ -169,6 +192,41 @@ class SchedulerManager:
 
         except Exception as e:
             logger.error(f"❌ Daily maintenance failed: {e}")
+
+    def _scheduled_quote_check(self) -> None:
+        """
+        スケジュールされたQuote Retweetチェック
+        """
+        try:
+            logger.info("🔄 Starting scheduled quote retweet check...")
+
+            # Quote Retweetチェック実行
+            results = self.auto_quote_retweeter.check_and_quote_tweets(dry_run=False)
+
+            if results["success"]:
+                logger.info("✅ Quote check completed:")
+                logger.info(f"{LOG_INDENT}📊 Checked tweets: {results['checked_tweets']}")
+                logger.info(f"{LOG_INDENT}🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"{LOG_INDENT}🔄 Quote tweets posted: {results['quote_posted']}")
+
+                if results.get("skipped_rate_limit", 0) > 0:
+                    logger.info(f"{LOG_INDENT}⏰ Skipped due to rate limit")
+
+                errors = results.get("errors", [])
+                if errors:
+                    logger.warning(f"{LOG_INDENT}⚠️  Errors occurred: {len(errors)}")
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初のMAX_ERRORS_TO_DISPLAY個のエラーのみ表示
+                        logger.warning(f"{ERROR_INDENT}- {error}")
+                    if len(errors) > MAX_ERRORS_TO_DISPLAY:
+                        logger.warning(f"{ERROR_INDENT}... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")
+            else:
+                logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")
+
+            # 古い処理済みツイートをクリーンアップ
+            self.auto_quote_retweeter.cleanup_old_processed_tweets()
+
+        except Exception as e:
+            logger.error(f"❌ Error in scheduled quote check: {e}")
 
     def start_scheduler(self, blocking: bool = True) -> None:
         """
@@ -382,24 +440,36 @@ class SchedulerManager:
         self.close()
 
 
-def test_scheduler() -> None:
+def test_scheduler(dry_run: bool = True) -> None:
     """スケジューラーのテスト実行"""
     print(f"🐻 {BOT_NAME} Scheduler test starting...")
 
     try:
-        with SchedulerManager() as scheduler:
-            # 接続テスト
-            if scheduler.twitter_client.test_connection():
-                print("✅ Twitter connection: OK")
+        with SchedulerManager(dry_run=dry_run) as scheduler:
+            if dry_run:
+                print("🎭 Running in DRY RUN mode - no actual posts will be made")
+            else:
+                print("⚠️ Running in LIVE mode - real posts will be made")
+
+            # 接続テスト（ドライランモードでは実際の接続テストをスキップ）
+            if not dry_run:
+                if scheduler.twitter_client.test_connection():
+                    print("✅ Twitter connection: OK")
+            else:
+                print("✅ Mock Twitter connection: OK (dry run)")
 
             # コンテンツ生成テスト
             content = scheduler.content_generator.generate_tweet_content()
             if content:
                 print(f"✅ Content generation: OK - {content}")
 
-            # 即座投稿テスト（実際には投稿しない）
-            print("📤 Testing immediate post (dry run)...")
-            # result = scheduler.post_now()  # コメントアウト（実際の投稿を避けるため）
+            # 即座投稿テスト
+            if dry_run:
+                print("📤 Testing immediate post (dry run)...")
+                print("✅ Mock post successful (would have posted in live mode)")
+            else:
+                print("📤 Testing immediate post (LIVE)...")
+                # result = scheduler.post_now()  # 実際の投稿（必要に応じてコメントアウト）
 
             # スケジュール設定テスト
             test_config = {
@@ -421,4 +491,4 @@ def test_scheduler() -> None:
 
 
 if __name__ == "__main__":
-    test_scheduler()
+    test_scheduler(dry_run=True)  # デフォルトはドライラン

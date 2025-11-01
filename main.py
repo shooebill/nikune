@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from config.settings import BOT_NAME
+from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.health_check import HealthChecker
 from nikune.scheduler import SchedulerManager
 from nikune.twitter_client import TwitterClient
+
+# 定数定義
+MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -53,14 +57,16 @@ def setup_sample_data(db_manager: DatabaseManager) -> bool:
         return False
 
 
-def test_all_components() -> bool:
+def test_all_components(dry_run: bool = False) -> bool:
     """全コンポーネントのテスト実行"""
     print(f"🐻 {BOT_NAME} - Full System Test")
+    if dry_run:
+        print("🎭 Running in DRY RUN mode")
     print("=" * 50)
 
     try:
         # ヘルスチェッカーを使用した包括的テスト
-        health_checker = HealthChecker()
+        health_checker = HealthChecker(dry_run=dry_run)
         health_results = health_checker.check_all_components()
 
         print("1. System Health Check...")
@@ -82,12 +88,15 @@ def test_all_components() -> bool:
 
         # Twitter接続テスト
         print("\n3. Testing Twitter API Connection...")
-        twitter_client = TwitterClient()
-        if twitter_client.test_connection():
-            print("✅ Twitter API: Connection successful")
+        if dry_run:
+            print("✅ Twitter API: Mock connection successful (dry run)")
         else:
-            print("❌ Twitter API: Connection failed")
-            return False
+            twitter_client = TwitterClient()
+            if twitter_client.test_connection():
+                print("✅ Twitter API: Connection successful")
+            else:
+                print("❌ Twitter API: Connection failed")
+                return False
 
         # コンテンツ生成テスト
         print("\n4. Testing Content Generation...")
@@ -102,7 +111,7 @@ def test_all_components() -> bool:
 
         # スケジューラーテスト
         print("\n5. Testing Scheduler...")
-        with SchedulerManager() as scheduler:
+        with SchedulerManager(dry_run=dry_run) as scheduler:
             # テスト用スケジュール設定
             test_config = {
                 "daily_posts": 1,
@@ -136,7 +145,7 @@ def post_now_command(
         print(f"🐻 {BOT_NAME} - Posting tweet now...")
 
     try:
-        with SchedulerManager() as scheduler:
+        with SchedulerManager(dry_run=dry_run) as scheduler:
             # カスタムテキストが指定された場合
             if text:
                 print(f"📝 Custom tweet: {text}")
@@ -288,6 +297,63 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
         return False
 
 
+def check_quote_retweet_command(dry_run: bool = False) -> bool:
+    """
+    Quote Retweet チェック・実行コマンド
+
+    Args:
+        dry_run: True の場合、実際には投稿せずにログ出力のみ
+
+    Returns:
+        実行成功かどうか
+    """
+    try:
+        logger.info("🔄 Starting quote retweet check...")
+
+        with DatabaseManager() as db_manager:
+            # Auto Quote Retweeter 作成（dry_runモード対応）
+            retweeter = AutoQuoteRetweeter(db_manager, dry_run=dry_run)
+
+            # ステータス表示
+            status = retweeter.get_status()
+            logger.info(f"📊 Quote retweeter status: {status}")
+
+            # レート制限チェック
+            if not status["can_quote_now"]:
+                if status["next_available_time"]:
+                    logger.info(f"⏰ Next quote available at: {status['next_available_time']}")
+                else:
+                    logger.info("⏰ Quote tweets temporarily limited")
+                return True  # エラーではないのでTrueを返す
+
+            # Quote Retweet実行
+            results = retweeter.check_and_quote_tweets(dry_run=dry_run)
+
+            # 結果表示
+            if results["success"]:
+                logger.info("✅ Quote retweet check completed:")
+                logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
+                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
+
+                errors = results.get("errors", [])
+                if errors:
+                    logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:
+                        logger.warning(f"      - {error}")
+                    if len(errors) > MAX_ERRORS_TO_DISPLAY:
+                        logger.warning(f"      ... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")
+
+                return True
+            else:
+                logger.error(f"❌ Quote retweet check failed: {results.get('error', 'Unknown error')}")
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ Failed to execute quote retweet command: {e}")
+        return False
+
+
 def setup_database_command() -> bool:
     """データベースセットアップ（レガシー関数）"""
     print(f"🐻 {BOT_NAME} - Setting up database...")
@@ -334,6 +400,8 @@ def main() -> None:
   python main.py --post-now --category お肉 # カテゴリ指定で投稿
   python main.py --post-now --text "こんにちは！" # カスタムテキストで投稿
   python main.py --post-now --text "テスト" --dry-run # カスタムテキストのドライラン
+  python main.py --quote-check              # お肉関連ツイートをチェック・Quote Retweet
+  python main.py --quote-check --dry-run    # Quote Retweetのドライラン
   python main.py --schedule                # スケジューラー開始
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
   python main.py --setup-db --file data/custom.tsv # 指定ファイルからインポート
@@ -345,6 +413,7 @@ def main() -> None:
     group.add_argument("--test", action="store_true", help="全コンポーネントのテスト実行")
     group.add_argument("--health", action="store_true", help="システム健全性チェック")
     group.add_argument("--post-now", action="store_true", help="即座に1回ツイート投稿")
+    group.add_argument("--quote-check", action="store_true", help="お肉関連ツイートをチェック・Quote Retweet")
     group.add_argument("--schedule", action="store_true", help="スケジューラーを開始")
     group.add_argument("--setup-db", action="store_true", help="データベースセットアップ")
 
@@ -374,9 +443,9 @@ def main() -> None:
         success = False
 
         if args.test:
-            success = test_all_components()
+            success = test_all_components(dry_run=args.dry_run)
         elif args.health:
-            health_checker = HealthChecker()
+            health_checker = HealthChecker(dry_run=args.dry_run)
             health_checker.run_diagnostic()
             success = True
         elif args.post_now:
@@ -386,6 +455,8 @@ def main() -> None:
                 text=args.text,
                 dry_run=args.dry_run,
             )
+        elif args.quote_check:
+            success = check_quote_retweet_command(dry_run=args.dry_run)
         elif args.schedule:
             success = start_scheduler_command(config_file=args.config)
         elif args.setup_db:
