@@ -103,15 +103,37 @@ class ContentGenerator:
         self.bot_name = BOT_NAME
 
         # NGワード正規表現パターンを初期化時にコンパイル（パフォーマンス最適化）
-        self._ng_patterns = self._compile_ng_patterns()
+        try:
+            self._ng_patterns = self._compile_ng_patterns()
+        except Exception as e:
+            logger.error(f"❌ Failed to compile NG patterns: {e}")
+            # フォールバック: 空のパターンリストを使用（NGワード機能を無効化）
+            self._ng_patterns = []
+            logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")
 
         logger.info(f"✅ {self.bot_name} Content generator initialized")
 
     def _compile_ng_patterns(self) -> List[Pattern[str]]:
-        """NGワードの正規表現パターンを事前にコンパイル"""
+        """
+        NGワードの正規表現パターンを事前にコンパイル
+
+        Returns:
+            コンパイル済みの正規表現パターンのリスト
+
+        Raises:
+            re.error: 正規表現のコンパイルに失敗した場合
+            ValueError: NGキーワードが無効な場合
+        """
         patterns = []
         for ng_word in self.NG_KEYWORDS:
-            pattern = rf"(?:^|{self.WORD_BOUNDARY_PATTERN}){re.escape(ng_word)}(?:{self.WORD_BOUNDARY_PATTERN}|$)"
+            # 前方境界: 行頭または単語境界（英数字・日本語以外の文字）
+            prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
+            # NGワード本体（エスケープ済み）
+            word = re.escape(ng_word)
+            # 後方境界: 単語境界または行末
+            suffix = rf"(?:{self.WORD_BOUNDARY_PATTERN}|$)"
+            # 全体パターンを組み立て
+            pattern = prefix + word + suffix
             patterns.append(re.compile(pattern))
         logger.debug(f"📋 Compiled {len(patterns)} NG word patterns")
         return patterns
@@ -357,7 +379,11 @@ class ContentGenerator:
                     logger.debug(f"🚫 NGワード検出: '{ng_word}' in '{text[:50]}...'")
                     return False
 
-            # お肉キーワードチェック（部分一致で十分）
+            # お肉キーワードチェック
+            # 部分一致で十分な理由: 「焼肉」「肉まん」「お肉」など「肉」を含む複合語も検出したいため、
+            # NGワードと異なり単語境界は考慮しません。お肉関連の表現は多様で、
+            # 包括的に検出することでより多くの関連ツイートをキャッチできます。
+            # ただし、キーワード数が非常に多い場合は線形検索となるため、パフォーマンスに注意してください。
             return any(keyword in text for keyword in self.MEAT_KEYWORDS)
 
         except Exception as e:

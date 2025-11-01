@@ -26,7 +26,19 @@ logger = logging.getLogger(__name__)
 
 
 class AutoQuoteRetweeter:
-    """自動コメント付きリツイート機能"""
+    """
+    自動コメント付きリツイート機能
+
+    フォロー中ユーザーのお肉関連ツイートを自動検出し、
+    かわいいコメント付きで引用リツイートする機能を提供します。
+
+    重要な制限事項:
+        - 処理済みツイートの追跡はメモリ内のOrderedDictで管理されており、
+          アプリケーション再起動後は履歴が失われます
+        - そのため、再起動直後は過去に処理済みのツイートを重複して
+          Quote Retweetする可能性があります
+        - 本格運用では Redis による永続化が推奨されます（TODO参照）
+    """
 
     def __init__(self, db_manager: DatabaseManager) -> None:
         """自動Quote Retweeterを初期化"""
@@ -53,7 +65,7 @@ class AutoQuoteRetweeter:
         self._warning_logged: bool = False
 
         logger.info(f"✅ {self.bot_name} Auto Quote Retweeter initialized")
-        logger.info(f"📊 Rate limits: {self.min_interval_minutes}min interval, " f"{self.max_quotes_per_hour}/hour max")
+        logger.info(f"📊 Rate limits: {self.min_interval_minutes}min interval, {self.max_quotes_per_hour}/hour max")
 
     def _cache_my_user_id(self) -> Optional[str]:
         """初期化時に自分のユーザーIDを取得してキャッシュ"""
@@ -244,6 +256,9 @@ class AutoQuoteRetweeter:
             count = len(self.processed_tweets)
             logger.warning(f"⚠️ Processed tweets approaching limit: {count}/{MAX_PROCESSED_TWEETS}")
             self._warning_logged = True
+        elif not threshold_reached and self._warning_logged:
+            # 閾値を下回った場合はフラグをリセット
+            self._warning_logged = False
 
     def cleanup_old_processed_tweets(self) -> None:
         """パブリックなクリーンアップメソッド（後方互換性）"""

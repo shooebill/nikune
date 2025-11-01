@@ -103,11 +103,12 @@ class SchedulerManager:
                 logger.info(f"🔄 Scheduled quote retweet check at {quote_time}")
 
             # 定期メンテナンス（毎日深夜）
+            maintenance_tasks = 1  # 現在は1つのメンテナンスタスクのみ
             schedule.every().day.at("03:00").do(self._daily_maintenance)
 
             logger.info(
                 f"✅ Schedule setup completed: {len(post_times)} posts, "
-                f"{len(quote_check_times)} quote checks, 1 maintenance"
+                f"{len(quote_check_times)} quote checks, {maintenance_tasks} maintenance"
             )
 
         except Exception as e:
@@ -207,7 +208,7 @@ class SchedulerManager:
                 errors = results.get("errors", [])
                 if errors:
                     logger.warning(f"   ⚠️  Errors occurred: {len(errors)}")
-                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初の数個のエラーのみ表示
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初のMAX_ERRORS_TO_DISPLAY個のエラーのみ表示
                         logger.warning(f"      - {error}")
             else:
                 logger.error(f"❌ Quote check failed: {results.get('error', 'Unknown error')}")
