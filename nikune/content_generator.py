@@ -157,8 +157,8 @@ class ContentGenerator:
             logger.info("NGキーワードが未設定のため、NGワードフィルタリングをスキップします")
             return None
 
-        # NGワード本体をエスケープして'|'で連結
-        words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS]
+        # NGワード本体をエスケープして'|'で連結（空文字列を除外）
+        words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS if ng_word]
 
         # 前方・後方境界を含めたパターンを組み立て
         prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
@@ -252,7 +252,7 @@ class ContentGenerator:
             # 動的要素を追加
             processed_content = self._add_dynamic_elements(base_template)
 
-            # 文字数チェック（280文字制限）- textwrapでUnicode/絵文字安全な切り詰め
+            # 文字数チェック（280文字以下に短縮）- textwrapでUnicode/絵文字安全な切り詰め
             if len(processed_content) > 280:
                 logger.warning(f"Tweet too long ({len(processed_content)} chars), truncating...")
                 processed_content = textwrap.shorten(processed_content, width=280, placeholder="...")

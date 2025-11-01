@@ -95,7 +95,13 @@ class AutoQuoteRetweeter:
             # Rate Limit対策: get_me()が失敗してもシステムは動作するよう設計
             me = self.twitter_client.client.get_me()
             if me and me.data:
-                user_id = getattr(me.data, "id", None)
+                if hasattr(me.data, "id"):
+                    user_id = me.data.id
+                elif isinstance(me.data, dict):
+                    user_id = me.data.get("id")
+                else:
+                    user_id = None
+                
                 if user_id is not None:
                     user_id = str(user_id)
                     logger.info(f"📋 Cached user ID: {user_id}")
