@@ -251,7 +251,8 @@ class AutoQuoteRetweeter:
             logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
 
         # 処理済みツイート数が上限の90%に達した場合に警告ログを出力（初回のみ）
-        threshold_reached = len(self.processed_tweets) >= MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD
+        # int()で明示的に整数化し、比較の意図を明確にする
+        threshold_reached = len(self.processed_tweets) >= int(MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD)
         if threshold_reached and not self._warning_logged:
             count = len(self.processed_tweets)
             logger.warning(f"⚠️ Processed tweets approaching limit: {count}/{MAX_PROCESSED_TWEETS}")
