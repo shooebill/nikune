@@ -21,6 +21,10 @@ from nikune.twitter_client import TwitterClient
 MAX_PROCESSED_TWEETS = 1000  # 処理済みツイートの最大追跡数
 CLEANUP_WARNING_THRESHOLD = 0.9  # クリーンアップ警告の閾値
 
+# Twitter API Rate Limit対策
+API_RETRY_DELAY_SECONDS = 60  # API エラー後の待機時間（秒）
+MAX_TIMELINE_FETCH_RETRIES = 2  # タイムライン取得の最大リトライ回数
+
 # ログ設定
 logger = logging.getLogger(__name__)
 
@@ -40,10 +44,11 @@ class AutoQuoteRetweeter:
         - 本格運用では Redis による永続化が推奨されます（TODO参照）
     """
 
-    def __init__(self, db_manager: DatabaseManager) -> None:
+    def __init__(self, db_manager: DatabaseManager, dry_run: bool = False) -> None:
         """自動Quote Retweeterを初期化"""
         self.db_manager = db_manager
-        self.twitter_client = TwitterClient()
+        self.dry_run = dry_run
+        self.twitter_client = TwitterClient(dry_run=dry_run)
         self.content_generator = ContentGenerator(db_manager)
         self.bot_name = BOT_NAME
 
@@ -58,8 +63,9 @@ class AutoQuoteRetweeter:
         self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
 
-        # 自分のユーザーIDをキャッシュ（API呼び出し最適化）
-        self.my_user_id: Optional[str] = self._cache_my_user_id()
+        # 自分のユーザーIDをキャッシュ（遅延初期化でRate Limit対策）
+        self.my_user_id: Optional[str] = None
+        self._user_id_fetch_attempted: bool = False
 
         # 警告ログ制御フラグ（繰り返し出力防止）
         self._warning_logged: bool = False
@@ -73,6 +79,8 @@ class AutoQuoteRetweeter:
             if self.twitter_client.client is None:
                 logger.warning("⚠️ Twitter client not available for user ID caching")
                 return None
+
+            # Rate Limit対策: get_me()が失敗してもシステムは動作するよう設計
             me = self.twitter_client.client.get_me()
             if me and me.data:
                 user_id = str(getattr(me.data, "id", ""))
@@ -80,7 +88,9 @@ class AutoQuoteRetweeter:
                 return user_id
             return None
         except Exception as e:
-            logger.warning(f"⚠️ Failed to cache user ID: {e}")
+            # Rate Limitエラーなどが発生した場合も警告のみで続行
+            logger.warning(f"⚠️ Failed to cache user ID (possibly rate limited): {e}")
+            logger.info("📝 System will continue without user ID caching (自分のツイート除外は無効化)")
             return None
 
     def check_and_quote_tweets(self, dry_run: bool = False) -> Dict[str, Any]:
@@ -111,11 +121,18 @@ class AutoQuoteRetweeter:
                 return results
 
             # タイムライン取得（ドライラン時はモックデータ使用）
-            if dry_run:
+            if dry_run or self.dry_run:
                 timeline_tweets = self._get_mock_timeline()
                 logger.info("🎭 Using mock timeline data for dry run")
             else:
-                timeline_tweets = self.twitter_client.get_home_timeline(max_results=20) or []
+                try:
+                    timeline_tweets = self.twitter_client.get_home_timeline(max_results=20) or []
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to get timeline (possibly rate limited): {e}")
+                    logger.info("📝 Skipping this check due to API error")
+                    results["success"] = True
+                    results["errors"].append(f"Timeline fetch failed: {e}")
+                    return results
 
             if not timeline_tweets:
                 logger.info("📭 No tweets found in timeline")
@@ -193,10 +210,18 @@ class AutoQuoteRetweeter:
         return len(self.quotes_in_last_hour) < self.max_quotes_per_hour
 
     def _is_own_tweet(self, tweet: Any) -> bool:
-        """自分のツイートかどうかチェック（キャッシュされたIDを使用）"""
+        """自分のツイートかどうかチェック（遅延初期化でRate Limit対策）"""
         try:
+            # 遅延初期化: 必要な時のみユーザーIDを取得
+            if self.my_user_id is None and not self._user_id_fetch_attempted:
+                self._user_id_fetch_attempted = True
+                self.my_user_id = self._cache_my_user_id()
+
             if self.my_user_id is None:
+                # ユーザーIDが取得できない場合は自分のツイート判定をスキップ
+                logger.debug("🔍 User ID unavailable, skipping own tweet check")
                 return False
+
             # キャッシュされたユーザーIDと比較（API呼び出しなし）
             tweet_author_id = str(getattr(tweet, "author_id", ""))
             return tweet_author_id == self.my_user_id

@@ -303,8 +303,8 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
         logger.info("🔄 Starting quote retweet check...")
 
         with DatabaseManager() as db_manager:
-            # Auto Quote Retweeter 作成
-            retweeter = AutoQuoteRetweeter(db_manager)
+            # Auto Quote Retweeter 作成（dry_runモード対応）
+            retweeter = AutoQuoteRetweeter(db_manager, dry_run=dry_run)
 
             # ステータス表示
             status = retweeter.get_status()

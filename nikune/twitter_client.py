@@ -27,11 +27,15 @@ logger = logging.getLogger(__name__)
 class TwitterClient:
     """Twitter API クライアント"""
 
-    def __init__(self) -> None:
+    def __init__(self, dry_run: bool = False) -> None:
         """Twitter APIクライアントを初期化"""
+        self.dry_run = dry_run
         self.client = None
         self.api = None
-        self._setup_client()
+        if not dry_run:
+            self._setup_client()
+        else:
+            logger.info(f"🎭 {BOT_NAME} Twitter client initialized in DRY RUN mode")
 
     def _setup_client(self) -> None:
         """Twitter APIクライアントをセットアップ"""
@@ -62,6 +66,10 @@ class TwitterClient:
 
     def test_connection(self) -> bool:
         """API接続テスト"""
+        if self.dry_run:
+            logger.info("🎭 [DRY RUN] Simulating connection test - SUCCESS")
+            return True
+
         try:
             if self.client is None:
                 logger.error("❌ Twitter client not initialized")
@@ -78,6 +86,10 @@ class TwitterClient:
 
     def post_tweet(self, text: str) -> Optional[str]:
         """ツイートを投稿"""
+        if self.dry_run:
+            logger.info(f"🎭 [DRY RUN] Would post tweet: {text}")
+            return "mock_tweet_id"
+
         try:
             if self.client is None:
                 logger.error("❌ Twitter client not initialized")
@@ -133,6 +145,10 @@ class TwitterClient:
 
     def quote_tweet(self, tweet_id: str, comment: str) -> Optional[str]:
         """コメント付きリツイート（Quote Tweet）"""
+        if self.dry_run:
+            logger.info(f"🎭 [DRY RUN] Would quote tweet {tweet_id} with comment: {comment}")
+            return "mock_quote_tweet_id"
+
         try:
             if self.client is None:
                 logger.error("❌ Twitter client not initialized")
@@ -159,6 +175,10 @@ class TwitterClient:
 
     def get_home_timeline(self, max_results: int = 10) -> Optional[list]:
         """フォロー中ユーザーのタイムライン取得"""
+        if self.dry_run:
+            logger.info(f"🎭 [DRY RUN] Would fetch {max_results} tweets from timeline")
+            return None  # AutoQuoteRetweeterでモックデータを使用
+
         try:
             if self.client is None:
                 logger.error("❌ Twitter client not initialized")
