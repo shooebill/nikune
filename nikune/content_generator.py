@@ -6,8 +6,9 @@ nikune bot content generator
 import logging
 import random
 import re
+import textwrap
 from datetime import datetime
-from typing import Any, Dict, Optional, Pattern
+from typing import Any, Dict, Optional
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -104,7 +105,7 @@ class ContentGenerator:
 
         # NGワード正規表現パターンを初期化時にコンパイル（パフォーマンス最適化）
         try:
-            self._ng_pattern: Optional[Pattern[str]] = self._compile_ng_pattern()
+            self._ng_pattern: Optional[re.Pattern[str]] = self._compile_ng_pattern()
         except Exception as e:
             logger.error(f"❌ Failed to compile NG pattern: {e}")
             # フォールバック: Noneを使用（NGワード機能を無効化）
@@ -113,7 +114,7 @@ class ContentGenerator:
 
         logger.info(f"✅ {self.bot_name} Content generator initialized")
 
-    def _compile_ng_pattern(self) -> Optional[Pattern[str]]:
+    def _compile_ng_pattern(self) -> Optional[re.Pattern[str]]:
         """
         NGワードの正規表現パターンを1つにまとめてコンパイル
 
@@ -193,10 +194,10 @@ class ContentGenerator:
             # 動的要素を追加
             processed_content = self._add_dynamic_elements(base_template)
 
-            # 文字数チェック（280文字制限）
+            # 文字数チェック（280文字制限）- textwrapでUnicode/絵文字安全な切り詰め
             if len(processed_content) > 280:
                 logger.warning(f"Tweet too long ({len(processed_content)} chars), truncating...")
-                processed_content = processed_content[:277] + "..."
+                processed_content = textwrap.shorten(processed_content, width=280, placeholder="...")
 
             return processed_content
 

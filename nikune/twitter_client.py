@@ -17,7 +17,7 @@ from config.settings import (
 )
 
 # 定数定義
-MAX_QUOTE_COMMENT_LENGTH = 250  # Quote comment の最大文字数
+MAX_QUOTE_COMMENT_LENGTH = 250  # Quote comment の最大文字数（Twitter280文字制限から引用URL約23文字を考慮）
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)

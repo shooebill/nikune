@@ -20,7 +20,9 @@ from nikune.twitter_client import TwitterClient
 # 定数定義
 MAX_PROCESSED_TWEETS = 1000  # 処理済みツイートの最大追跡数
 CLEANUP_WARNING_THRESHOLD = 0.9  # クリーンアップ警告の閾値
-CLEANUP_WARNING_COUNT = int(MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD)  # 警告閾値（定数化）
+CLEANUP_WARNING_COUNT = int(
+    MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD
+)  # 警告閾値（浮動小数点計算後、int変換で切り捨て, 900）
 
 # Twitter API Rate Limit対策
 API_RETRY_DELAY_SECONDS = 60  # API エラー後の待機時間（秒）
@@ -42,7 +44,7 @@ class AutoQuoteRetweeter:
           アプリケーション再起動後は履歴が失われます
         - そのため、再起動直後は過去に処理済みのツイートを重複して
           Quote Retweetする可能性があります
-        - 本格運用では Redis による永続化が推奨されます（TODO参照）
+        - 本格運用では Redis による永続化が推奨されます（上記「重要な制限事項」参照）
     """
 
     def __init__(self, db_manager: DatabaseManager, dry_run: bool = False) -> None:
@@ -84,9 +86,14 @@ class AutoQuoteRetweeter:
             # Rate Limit対策: get_me()が失敗してもシステムは動作するよう設計
             me = self.twitter_client.client.get_me()
             if me and me.data:
-                user_id = str(getattr(me.data, "id", ""))
-                logger.info(f"📋 Cached user ID: {user_id}")
-                return user_id
+                user_id = getattr(me.data, "id", None)
+                if user_id is not None:
+                    user_id = str(user_id)
+                    logger.info(f"📋 Cached user ID: {user_id}")
+                    return user_id
+                else:
+                    logger.warning("⚠️ User ID not found in response data")
+                    return None
             return None
         except Exception as e:
             # Rate Limitエラーなどが発生した場合も警告のみで続行
@@ -144,10 +151,12 @@ class AutoQuoteRetweeter:
             logger.info(f"🔍 Checking {len(timeline_tweets)} tweets from timeline")
 
             # 各ツイートをチェック
+            skipped_processed = 0
             for tweet in timeline_tweets:
                 try:
                     # 既に処理済みかチェック（OrderedDictでO(1)検索）
                     if tweet.id in self.processed_tweets:
+                        skipped_processed += 1
                         logger.debug(f"⏭️ Already processed tweet: {tweet.id}")
                         continue
 
@@ -187,7 +196,13 @@ class AutoQuoteRetweeter:
                     logger.error(f"❌ {error_msg}")
                     results["errors"].append(error_msg)
 
+            results["skipped_already_processed"] = skipped_processed
             results["success"] = True
+
+            # 処理結果のサマリーログ
+            if skipped_processed > 0:
+                logger.info(f"📊 Skipped {skipped_processed} already processed tweets")
+
             return results
 
         except Exception as e:
@@ -225,7 +240,10 @@ class AutoQuoteRetweeter:
                 return False
 
             # キャッシュされたユーザーIDと比較（API呼び出しなし）
-            tweet_author_id = str(getattr(tweet, "author_id", ""))
+            if hasattr(tweet, "author_id") and tweet.author_id is not None:
+                tweet_author_id = str(tweet.author_id)
+            else:
+                tweet_author_id = ""
             return tweet_author_id == self.my_user_id
         except Exception:
             return False
