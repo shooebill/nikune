@@ -229,6 +229,13 @@ class AutoQuoteRetweeter:
                         if score >= self.high_priority_score:  # HIGH priority
                             logger.info("🎯 High priority tweet processed - continuing search for more")
                             # 高優先度の場合は処理後も続行（次のツイートもチェック）
+                            # ただし、レート制限に達していればループを抜ける
+                            if not self._can_quote_high_priority():
+                                logger.info(
+                                    "⏰ High priority rate limit reached after processing, "
+                                    "stopping further processing in this batch"
+                                )
+                                break
                         else:
                             # 中・低優先度の場合は1件処理したら終了（従来通り）
                             break

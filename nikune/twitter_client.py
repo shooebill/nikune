@@ -33,6 +33,7 @@ def _safe_text_length(text: str) -> int:
 
     Note:
         unicodedataを使用して正規化を行い、より正確な文字数をカウント
+        ただし、Twitter APIの公式カウントロジック（絵文字や結合文字の特殊な処理）とは異なる可能性があります
         TODO: 将来的にはtwitter-text-parserライブラリの使用を検討
     """
     # NFCで正規化（結合文字を正規化）
@@ -186,9 +187,14 @@ class TwitterClient:
                 normalized_comment = unicodedata.normalize("NFC", comment)
                 target_length = MAX_QUOTE_COMMENT_LENGTH - 3  # "..." を考慮
                 # 切り詰め後の文字数を確認し、必要に応じてさらに短縮
-                # target_lengthを減らせば_safe_text_length(truncated)も減るため、必ず終了する
-                # target_length > 0のチェックは明示的な終了条件として追加
+                # パフォーマンス改善: まず超過分を概算してから微調整
                 truncated = normalized_comment[:target_length] + "..."
+                # 超過分を一気に引いてから微調整
+                over = _safe_text_length(truncated) - MAX_QUOTE_COMMENT_LENGTH
+                if over > 0:
+                    target_length = max(0, target_length - over)
+                    truncated = normalized_comment[:target_length] + "..."
+                # 微調整ループ（target_lengthを減らせば_safe_text_length(truncated)も減るため、必ず終了する）
                 while _safe_text_length(truncated) > MAX_QUOTE_COMMENT_LENGTH and target_length > 0:
                     target_length -= 1
                     truncated = normalized_comment[:target_length] + "..."

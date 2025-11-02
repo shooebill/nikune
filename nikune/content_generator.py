@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
 from .database import DatabaseManager
+from .twitter_client import _safe_text_length
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -267,8 +268,8 @@ class ContentGenerator:
             # 期待通りに動作しない可能性がある。そのため、直接文字列を切り詰める方式を採用。
             # TODO: Twitterの文字数カウントは結合文字や絵文字を考慮した特殊なロジックを使用するため、
             # より正確な文字数制限を守るには twitter-text-parser ライブラリの使用を検討。
-            if len(processed_content) > 280:
-                logger.warning(f"Tweet too long ({len(processed_content)} chars), truncating...")
+            if _safe_text_length(processed_content) > 280:
+                logger.warning(f"Tweet too long ({_safe_text_length(processed_content)} chars), truncating...")
                 # 277文字 + "..." = 280文字以内に収まるよう切り詰め
                 # 注意: この方法はTwitterの正確な文字数カウント（結合文字・絵文字考慮）を反映していない
                 processed_content = processed_content[:277] + "..."
