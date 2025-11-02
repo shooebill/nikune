@@ -201,7 +201,7 @@ class SchedulerManager:
             logger.info("🔄 Starting scheduled quote retweet check...")
 
             # Quote Retweetチェック実行
-            results = self.auto_quote_retweeter.check_and_quote_tweets(dry_run=False)
+            results = self.auto_quote_retweeter.check_and_quote_tweets(dry_run=self.dry_run)
 
             if results["success"]:
                 logger.info("✅ Quote check completed:")

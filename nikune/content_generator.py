@@ -6,7 +6,6 @@ nikune bot content generator
 import logging
 import random
 import re
-import textwrap
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -254,10 +253,16 @@ class ContentGenerator:
             # 動的要素を追加
             processed_content = self._add_dynamic_elements(base_template)
 
-            # 文字数チェック（280文字以下に短縮）- textwrapでUnicode/絵文字安全な切り詰め
+            # 文字数チェック（280文字以下に短縮）
+            # 注意: textwrap.shorten()は単語境界で切り詰めるため、日本語（スペースなし）では
+            # 期待通りに動作しない可能性がある。そのため、直接文字列を切り詰める方式を採用。
+            # TODO: Twitterの文字数カウントは結合文字や絵文字を考慮した特殊なロジックを使用するため、
+            # より正確な文字数制限を守るには twitter-text-parser ライブラリの使用を検討。
             if len(processed_content) > 280:
                 logger.warning(f"Tweet too long ({len(processed_content)} chars), truncating...")
-                processed_content = textwrap.shorten(processed_content, width=280, placeholder="...")
+                # 277文字 + "..." = 280文字以内に収まるよう切り詰め
+                # 注意: この方法はTwitterの正確な文字数カウント（結合文字・絵文字考慮）を反映していない
+                processed_content = processed_content[:277] + "..."
 
             return processed_content
 

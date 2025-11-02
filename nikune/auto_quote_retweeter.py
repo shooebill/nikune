@@ -24,9 +24,6 @@ from nikune.twitter_client import TwitterClient
 # 定数定義
 MAX_PROCESSED_TWEETS = 1000  # 処理済みツイートの最大追跡数
 CLEANUP_WARNING_THRESHOLD = 0.9  # クリーンアップ警告の閾値
-CLEANUP_WARNING_COUNT = int(
-    MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD
-)  # 警告閾値（浮動小数点計算後、int変換で切り捨て, 900）
 
 # Twitter API Rate Limit対策
 API_RETRY_DELAY_SECONDS = 60  # API エラー後の待機時間（秒）
@@ -390,10 +387,10 @@ class AutoQuoteRetweeter:
                 logger.debug(f"🧹 Removed old processed tweet: {oldest_tweet_id}")
 
             # 処理済みツイート数が上限の90%に達した場合に警告ログを出力（初回のみ）
-            threshold_reached = len(self.processed_tweets) >= CLEANUP_WARNING_COUNT
+            count = len(self.processed_tweets)
+            threshold_reached = count >= int(MAX_PROCESSED_TWEETS * CLEANUP_WARNING_THRESHOLD)
 
         if threshold_reached and not self._warning_logged:
-            count = len(self.processed_tweets)
             logger.warning(f"⚠️ Processed tweets approaching limit: {count}/{MAX_PROCESSED_TWEETS}")
             self._warning_logged = True
         elif not threshold_reached and self._warning_logged:

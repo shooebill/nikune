@@ -181,7 +181,18 @@ class TwitterClient:
             comment_length = _safe_text_length(comment)
             if comment_length > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
                 logger.warning(f"Comment too long ({comment_length} chars), truncating...")
-                comment = comment[:MAX_QUOTE_COMMENT_LENGTH - 3] + "..."  # fmt: skip
+                # 結合文字・絵文字を考慮した安全な切り詰め
+                # NFC正規化後に切り詰め、その後再度文字数チェックして調整
+                normalized_comment = unicodedata.normalize("NFC", comment)
+                target_length = MAX_QUOTE_COMMENT_LENGTH - 3  # "..." を考慮
+                # 切り詰め後の文字数を確認し、必要に応じてさらに短縮
+                # target_lengthを減らせば_safe_text_length(truncated)も減るため、必ず終了する
+                # target_length > 0のチェックは明示的な終了条件として追加
+                truncated = normalized_comment[:target_length] + "..."
+                while _safe_text_length(truncated) > MAX_QUOTE_COMMENT_LENGTH and target_length > 0:
+                    target_length -= 1
+                    truncated = normalized_comment[:target_length] + "..."
+                comment = truncated
 
             # コメント付きリツイート実行
             response = self.client.create_tweet(text=comment, quote_tweet_id=tweet_id)
