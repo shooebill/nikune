@@ -193,7 +193,7 @@ class AutoQuoteRetweeter:
                         logger.info(f"🥩 Found meat-related tweet: {tweet.id}")
                         logger.info(f"🎯 Priority: {priority_level} (Score: {score})")
                         logger.info(f"🔍 Keywords: {keywords}")
-                        logger.info(f"�📝 Content: {tweet.text[:100]}...")
+                        logger.info(f"💬📝 Content: {tweet.text[:100]}...")
 
                         # 優先度フィルタリング
                         if score < self.min_priority_score:
