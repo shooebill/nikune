@@ -191,7 +191,7 @@ class AutoQuoteRetweeter:
                         keywords = score_info["matched_keywords"]
 
                         logger.info(f"🥩 Found meat-related tweet: {tweet.id}")
-                        logger.info(f"� Priority: {priority_level} (Score: {score})")
+                        logger.info(f"🎯 Priority: {priority_level} (Score: {score})")
                         logger.info(f"🔍 Keywords: {keywords}")
                         logger.info(f"�📝 Content: {tweet.text[:100]}...")
 
