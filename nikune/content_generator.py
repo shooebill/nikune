@@ -159,6 +159,8 @@ class ContentGenerator:
 
         # NGワード本体をエスケープして'|'で連結（空文字列を除外）
         words = [re.escape(ng_word) for ng_word in self.NG_KEYWORDS if ng_word]
+        if not words:
+            return None
 
         # 前方・後方境界を含めたパターンを組み立て
         prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
