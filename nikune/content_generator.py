@@ -163,7 +163,7 @@ class ContentGenerator:
         # 前方・後方境界を含めたパターンを組み立て
         prefix = rf"(?:^|{self.WORD_BOUNDARY_PATTERN})"
         suffix = rf"(?:{self.WORD_BOUNDARY_PATTERN}|$)"
-        pattern = prefix + "(?:" + "|".join(words) + ")" + suffix
+        pattern = f"{prefix}(?:{'|'.join(words)}){suffix}"
 
         compiled = re.compile(pattern)
         logger.debug(f"📋 Compiled unified NG word pattern with {len(self.NG_KEYWORDS)} keywords")
