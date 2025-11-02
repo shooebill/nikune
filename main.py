@@ -327,7 +327,7 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
                 return True  # エラーではないのでTrueを返す
 
             # Quote Retweet実行
-            results = retweeter.check_and_quote_tweets(dry_run=dry_run)
+            results = retweeter.check_and_quote_tweets()
 
             # 結果表示
             if results["success"]:
