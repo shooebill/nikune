@@ -191,7 +191,8 @@ class ContentGenerator:
             pattern_str = "|".join(escaped_keywords)
 
             try:
-                # re.IGNORECASE は日本語キーワードには効果がありませんが、英語キーワード（例: 'BBQ'）の大文字小文字を区別しないために付与しています。
+                # re.IGNORECASE は日本語キーワードには効果がありませんが、
+                # 英語キーワード（例: 'BBQ'）の大文字小文字を区別しないために付与しています。
                 compiled_pattern = re.compile(pattern_str, re.IGNORECASE)
                 compiled_patterns[level] = compiled_pattern
                 logger.debug(f"📋 Compiled {level} priority pattern with {len(keywords)} keywords")
