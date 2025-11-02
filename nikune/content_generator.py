@@ -107,6 +107,7 @@ class ContentGenerator:
 
     # 正規表現パターン定数（可読性向上のため分割定義）
     # 日本語文字クラス: ひらがな、カタカナ、漢字（拡張Aも含む）
+    # \u3400-\u4DBF（CJK統合漢字拡張A）は、稀に使われる漢字や人名・地名などの対応、将来的な拡張性を考慮して含めています。
     JAPANESE_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF"
     # 単語境界パターン: 英数字または日本語文字以外
     WORD_BOUNDARY_PATTERN = rf"[^\w{JAPANESE_CHARS}]"
