@@ -67,9 +67,7 @@ class ContentGenerator:
     }
 
     # 後方互換性のため、従来のMEAT_KEYWORDSも維持
-    MEAT_KEYWORDS: list[str] = []
-    for priority_data in MEAT_KEYWORDS_PRIORITY.values():
-        MEAT_KEYWORDS.extend(priority_data["keywords"])
+    MEAT_KEYWORDS: list[str] = [kw for v in MEAT_KEYWORDS_PRIORITY.values() for kw in v["keywords"]]
 
     # NGワード（設定ファイルから読み込み）
     NG_KEYWORDS = NG_KEYWORDS

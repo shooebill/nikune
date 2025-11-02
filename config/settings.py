@@ -3,9 +3,13 @@ nikune bot configuration settings
 環境変数からAPIキーなどの設定を読み込む
 """
 
+import logging
 import os
 
 from dotenv import load_dotenv
+
+# ログ設定（他のモジュールがimportされる前に初期化）
+logger = logging.getLogger(__name__)
 
 # .envファイルを読み込み
 load_dotenv()
@@ -59,7 +63,7 @@ def _load_ng_keywords() -> list[str]:
             return [stripped for line in f if (stripped := line.strip()) and not stripped.startswith("#")]
 
     # NGワードリストが未設定の場合は空リストを返す
-    print(
+    logger.warning(
         f"⚠️ NGワードリストが見つかりませんでした: {ng_keywords_file}。環境変数NG_KEYWORDSまたはファイルで設定してください。"
     )
     return []
