@@ -215,7 +215,8 @@ class SchedulerManager:
                 errors = results.get("errors", [])
                 if errors:
                     logger.warning(f"{LOG_INDENT}⚠️  Errors occurred: {len(errors)}")
-                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:  # 最初のMAX_ERRORS_TO_DISPLAY個のエラーのみ表示
+                    # 大量のエラーでログが埋まるのを防ぐため、最初のMAX_ERRORS_TO_DISPLAY件のみ表示
+                    for error in errors[:MAX_ERRORS_TO_DISPLAY]:
                         logger.warning(f"{ERROR_INDENT}- {error}")
                     if len(errors) > MAX_ERRORS_TO_DISPLAY:
                         logger.warning(f"{ERROR_INDENT}... and {len(errors) - MAX_ERRORS_TO_DISPLAY} more errors")

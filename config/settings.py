@@ -56,7 +56,7 @@ def _load_ng_keywords() -> list[str]:
     if os.path.isfile(ng_keywords_file):
         with open(ng_keywords_file, encoding="utf-8") as f:
             # 空行や#で始まる行は無視
-            return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+            return [stripped for line in f if (stripped := line.strip()) and not stripped.startswith("#")]
 
     # NGワードリストが未設定の場合は空リストを返す
     print(

@@ -8,7 +8,7 @@ import random
 import re
 import textwrap
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -191,6 +191,7 @@ class ContentGenerator:
             pattern_str = "|".join(escaped_keywords)
 
             try:
+                # re.IGNORECASE は日本語キーワードには効果がありませんが、英語キーワード（例: 'BBQ'）の大文字小文字を区別しないために付与しています。
                 compiled_pattern = re.compile(pattern_str, re.IGNORECASE)
                 compiled_patterns[level] = compiled_pattern
                 logger.debug(f"📋 Compiled {level} priority pattern with {len(keywords)} keywords")
@@ -574,7 +575,7 @@ class ContentGenerator:
             logger.error(f"❌ Error generating quote comment: {e}")
             return "🐻 お肉〜！"  # フォールバック
 
-    def _select_comment_by_priority(self, priority_level: str, matched_keywords: list, original_text: str) -> str:
+    def _select_comment_by_priority(self, priority_level: str, matched_keywords: List[str], original_text: str) -> str:
         """優先度レベルに基づいてコメントを選択"""
         try:
             # 高優先度キーワード用の特別なコメント

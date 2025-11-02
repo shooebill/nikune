@@ -5,7 +5,7 @@ Twitter APIとの接続、ツイート投稿などを担当
 
 import logging
 import unicodedata
-from typing import Optional
+from typing import Any, List, Optional
 
 import tweepy
 
@@ -197,7 +197,7 @@ class TwitterClient:
             logger.error(f"❌ Failed to quote tweet: {e}")
             return None
 
-    def get_home_timeline(self, max_results: int = 10) -> Optional[list]:
+    def get_home_timeline(self, max_results: int = 10) -> Optional[List[Any]]:
         """フォロー中ユーザーのタイムライン取得"""
         if self.dry_run:
             logger.info(f"🎭 [DRY RUN] Would fetch {max_results} tweets from timeline")
