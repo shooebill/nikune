@@ -66,7 +66,10 @@ class ContentGenerator:
     }
 
     # 後方互換性のため、従来のMEAT_KEYWORDSも維持
-    MEAT_KEYWORDS: list[str] = [kw for v in MEAT_KEYWORDS_PRIORITY.values() for kw in v["keywords"]]
+    @property
+    def MEAT_KEYWORDS(self) -> list[str]:
+        """MEAT_KEYWORDS_PRIORITYから動的に生成されるお肉キーワードリスト"""
+        return [kw for v in self.MEAT_KEYWORDS_PRIORITY.values() for kw in v["keywords"]]
 
     # NGワード（設定ファイルから読み込み）
     NG_KEYWORDS = NG_KEYWORDS
@@ -121,8 +124,13 @@ class ContentGenerator:
         # NGワード正規表現パターンを初期化時にコンパイル（パフォーマンス最適化）
         try:
             self._ng_pattern: Optional[re.Pattern[str]] = self._compile_ng_pattern()
-        except Exception as e:
-            logger.error(f"❌ Failed to compile NG pattern: {e}")
+        except re.error as e:
+            logger.error(f"❌ Failed to compile NG pattern (regex error): {e}")
+            # フォールバック: Noneを使用（NGワード機能を無効化）
+            self._ng_pattern = None
+            logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")
+        except ValueError as e:
+            logger.error(f"❌ Failed to compile NG pattern (value error): {e}")
             # フォールバック: Noneを使用（NGワード機能を無効化）
             self._ng_pattern = None
             logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")

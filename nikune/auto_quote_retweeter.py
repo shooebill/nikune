@@ -73,6 +73,8 @@ class AutoQuoteRetweeter:
         self.min_priority_score = QUOTE_RETWEET_MIN_PRIORITY_SCORE
         self.high_priority_limit = QUOTE_RETWEET_HIGH_PRIORITY_LIMIT
         self.high_priority_quotes_in_hour: List[datetime] = []
+        # HIGH優先度のスコア値を取得（MEAT_KEYWORDS_PRIORITYから動的に取得）
+        self.high_priority_score = self.content_generator.MEAT_KEYWORDS_PRIORITY["HIGH"]["priority"]
 
         # 自分のユーザーIDをキャッシュ（遅延初期化でRate Limit対策）
         self.my_user_id: Optional[str] = None
@@ -115,12 +117,9 @@ class AutoQuoteRetweeter:
             logger.info("📝 System will continue without user ID caching (自分のツイート除外は無効化)")
             return None
 
-    def check_and_quote_tweets(self, dry_run: bool = False) -> Dict[str, Any]:
+    def check_and_quote_tweets(self) -> Dict[str, Any]:
         """
         タイムラインをチェックしてお肉関連ツイートをQuote Retweet
-
-        Args:
-            dry_run: True の場合、実際には投稿せずにログ出力のみ
 
         Returns:
             実行結果の辞書
@@ -143,7 +142,7 @@ class AutoQuoteRetweeter:
                 return results
 
             # タイムライン取得（ドライラン時はモックデータ使用）
-            if dry_run or self.dry_run:
+            if self.dry_run:
                 timeline_tweets = self._get_mock_timeline()
                 logger.info("🎭 Using mock timeline data for dry run")
             else:
@@ -198,14 +197,14 @@ class AutoQuoteRetweeter:
                             continue
 
                         # 高優先度ツイートのレート制限チェック
-                        if score >= 3 and not self._can_quote_high_priority():
+                        if score >= self.high_priority_score and not self._can_quote_high_priority():
                             logger.info(f"⏰ High priority rate limit reached, skipping tweet (Score: {score})")
                             continue
 
                         # コメント生成（優先度対応版）
                         comment = self.content_generator.generate_quote_comment(tweet.text)
 
-                        if dry_run or self.dry_run:
+                        if self.dry_run:
                             logger.info(f"🔄 [DRY RUN] Would quote tweet with comment: {comment}")
                         else:
                             # Quote Tweet実行
@@ -216,7 +215,7 @@ class AutoQuoteRetweeter:
                                 self.quotes_in_last_hour.append(self.last_quote_time)
 
                                 # 高優先度ツイートの記録
-                                if score >= 3:
+                                if score >= self.high_priority_score:
                                     self.high_priority_quotes_in_hour.append(self.last_quote_time)
 
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
@@ -227,7 +226,7 @@ class AutoQuoteRetweeter:
                         self._cleanup_old_processed_tweets()
 
                         # 優先度の高いツイートはすぐに処理、低いものは条件によりスキップ
-                        if score >= 3:  # HIGH priority
+                        if score >= self.high_priority_score:  # HIGH priority
                             logger.info("🎯 High priority tweet processed - continuing search for more")
                             # 高優先度の場合は処理後も続行（次のツイートもチェック）
                         else:
@@ -297,10 +296,11 @@ class AutoQuoteRetweeter:
                 logger.warning(f"⚠️ {error_msg}")
 
                 if attempt < max_retries:
-                    # 指数的バックオフで待機
-                    delay = base_delay * (API_BACKOFF_MULTIPLIER**attempt)
-                    logger.info(f"⏰ Retrying after {delay} seconds...")
-                    time.sleep(delay)
+                    # attempt==0のときは即座にリトライ、1回目以降で指数バックオフを適用
+                    if attempt > 0:
+                        delay = base_delay * (API_BACKOFF_MULTIPLIER ** (attempt - 1))
+                        logger.info(f"⏰ Retrying after {delay} seconds...")
+                        time.sleep(delay)
                 else:
                     logger.error(f"❌ Timeline fetch failed after {max_retries + 1} attempts")
                     return None
@@ -467,7 +467,7 @@ def test_auto_quote_retweeter(dry_run: bool = True) -> None:
 
             # テスト実行
             print("🔄 Running test...")
-            results = retweeter.check_and_quote_tweets(dry_run=dry_run)
+            results = retweeter.check_and_quote_tweets()
             print(f"✅ Test results: {results}")
 
     except Exception as e:
