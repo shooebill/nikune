@@ -18,11 +18,14 @@ check_code.sh
 
 # IDE and development tools
 .claude/
+.cursor/
 .serena/
 .vscode/
 .idea/
 .flake8
 pyproject.toml
+cipher.yml
+data/cipher*
 
 # Data files - 実データは除外、サンプルデータのみ保持
 data/templates.db
@@ -53,3 +56,4 @@ logs/
 
 # uv特有のファイル（Mac環境との互換性のため）
 uv.lock
+
