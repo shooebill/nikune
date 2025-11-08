@@ -184,3 +184,38 @@ class NotificationManagerTests(TestCase):
 
         failing_channel.send.assert_called_once_with("複数チャネル通知")
         succeeding_channel.send.assert_called_once_with("複数チャネル通知")
+
+
+class UtilityFunctionsTests(TestCase):
+    def test_parse_command_with_default(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            result = runner._parse_command(["python", "default.py"])
+            self.assertEqual(result, ["python", "default.py"])
+
+    def test_parse_command_with_env_override(self) -> None:
+        with mock.patch.dict(os.environ, {"NIKUNE_SERVICE_COMMAND": "python custom.py --flag"}, clear=True):
+            result = runner._parse_command(["python", "default.py"])
+            self.assertEqual(result, ["python", "custom.py", "--flag"])
+
+    def test_parse_command_with_quotes(self) -> None:
+        with mock.patch.dict(os.environ, {"NIKUNE_SERVICE_COMMAND": 'python "file with spaces.py"'}, clear=True):
+            result = runner._parse_command(["python", "default.py"])
+            self.assertEqual(result, ["python", "file with spaces.py"])
+
+    def test_env_flag_default_false(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(runner._env_flag("TEST_FLAG"))
+
+    def test_env_flag_default_true(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(runner._env_flag("TEST_FLAG", default=True))
+
+    def test_env_flag_true_values(self) -> None:
+        for value in ["1", "true", "True", "TRUE", "t", "T", "yes", "YES", "y", "Y"]:
+            with mock.patch.dict(os.environ, {"TEST_FLAG": value}, clear=True):
+                self.assertTrue(runner._env_flag("TEST_FLAG"), f"Failed for value: {value}")
+
+    def test_env_flag_false_values(self) -> None:
+        for value in ["0", "false", "False", "FALSE", "no", "NO", "n", "N", "other"]:
+            with mock.patch.dict(os.environ, {"TEST_FLAG": value}, clear=True):
+                self.assertFalse(runner._env_flag("TEST_FLAG"), f"Failed for value: {value}")

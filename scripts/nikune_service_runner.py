@@ -20,6 +20,8 @@ nikune service runner
         正常終了時も再起動するか（true/false, 既定: false）
     - NIKUNE_MAX_RESTARTS:
         最大再起動回数（未設定なら無制限）
+    - NIKUNE_NOTIFICATION_TIMEOUT:
+        通知送信時のタイムアウト秒数（既定: 5）
     - SLACK_WEBHOOK_URL:
         Slack 通知用 Incoming Webhook URL（任意）
     - SLACK_WEBHOOK_USERNAME / SLACK_WEBHOOK_ICON_EMOJI:
@@ -35,6 +37,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import platform
 import shlex
 import signal
 import socket
@@ -45,9 +48,16 @@ from abc import ABC, abstractmethod
 from types import ModuleType
 from typing import Iterable, List, Optional, Sequence
 
-requests_module: ModuleType = importlib.import_module("requests")
+requests_module: Optional[ModuleType]
+try:
+    requests_module = importlib.import_module("requests")
+except ImportError:
+    requests_module = None
 
 LOGGER = logging.getLogger("nikune.service_runner")
+
+# 通知送信時のタイムアウト秒数（環境変数で上書き可能）
+NOTIFICATION_TIMEOUT = int(os.getenv("NIKUNE_NOTIFICATION_TIMEOUT", "5"))
 
 
 def _parse_command(default: Sequence[str]) -> List[str]:
@@ -123,7 +133,7 @@ class SlackNotification(NotificationChannel):
             payload["icon_emoji"] = self.icon_emoji
 
         try:
-            response = requests_module.post(self.webhook_url, json=payload, timeout=5)
+            response = requests_module.post(self.webhook_url, json=payload, timeout=NOTIFICATION_TIMEOUT)
             response.raise_for_status()
         except Exception as exc:  # pragma: no cover - 通信環境依存
             LOGGER.error("%s 通知の送信に失敗しました: %s", self.name, exc)
@@ -181,7 +191,7 @@ class LineNotification(NotificationChannel):
                     "https://api.line.me/v2/bot/message/push",
                     json=payload,
                     headers=headers,
-                    timeout=5,
+                    timeout=NOTIFICATION_TIMEOUT,
                 )
                 response.raise_for_status()
             except Exception as exc:  # pragma: no cover - 通信環境依存
@@ -217,7 +227,7 @@ def build_notification_manager() -> NotificationManager:
         channels.append(line_channel)
 
     if not channels:
-        LOGGER.info("通知チャネルが設定されていないため、通知送信は行われません。")
+        LOGGER.debug("通知チャネルが設定されていないため、通知送信は行われません。")
 
     return NotificationManager(channels)
 
@@ -247,11 +257,13 @@ def main() -> None:
         LOGGER.info("Signal %s received. Stopping after current process exits.", signum)
         should_stop = True
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            signal.signal(sig, _handle_signal)
-        except Exception:  # pragma: no cover - Windows など一部環境対策
-            pass
+    # Windows では SIGTERM が存在しないため、プラットフォーム判定
+    signals = [signal.SIGINT]
+    if platform.system() != "Windows":
+        signals.append(signal.SIGTERM)
+
+    for sig in signals:
+        signal.signal(sig, _handle_signal)
 
     notification_manager = build_notification_manager()
 
@@ -265,17 +277,22 @@ def main() -> None:
         except KeyboardInterrupt:
             LOGGER.info("KeyboardInterrupt received. Terminating child process...")
             process.terminate()
-            process.wait()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                LOGGER.warning("Child process did not terminate gracefully. Forcing kill...")
+                process.kill()
+                process.wait()
             return_code = 0
 
         runtime = time.time() - start_time
         LOGGER.info("Process exited with code %s after %.1f seconds.", return_code, runtime)
 
+        # 異常終了時は通知を送信
         if return_code != 0:
-            restarts += 1
             notification_manager.send(
-                f":warning: nikune scheduler exited (code={return_code}, runtime={runtime:.1f}s) "
-                f"on host `{host}`. Restarting..."
+                f"[WARNING] nikune scheduler exited with code {return_code} "
+                f"(runtime: {runtime:.1f}s) on host {host}. Restarting..."
             )
 
         if should_stop:
@@ -286,11 +303,14 @@ def main() -> None:
             LOGGER.info("Process exited normally. Service runner will stop.")
             break
 
+        # 再起動する場合はカウントを増やす（正常終了・異常終了問わず）
+        restarts += 1
+
         if max_restart_count is not None and restarts > max_restart_count:
             LOGGER.error("Max restart count (%s) exceeded. Stopping service runner.", max_restart_count)
             notification_manager.send(
-                f":rotating_light: nikune service exceeded max restart count ({max_restart_count}) "
-                f"on host `{host}`. Manual intervention required."
+                f"[CRITICAL] nikune service exceeded max restart count ({max_restart_count}) "
+                f"on host {host}. Manual intervention required."
             )
             break
 
