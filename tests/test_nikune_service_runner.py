@@ -97,11 +97,90 @@ class NotificationManagerTests(TestCase):
         dummy_requests = DummyRequests()
 
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(runner, "requests", dummy_requests):
-                manager = runner.build_notification_manager()
-                self.assertEqual(len(manager.channels), 0)
+            manager = runner.build_notification_manager()
+            self.assertEqual(len(manager.channels), 0)
 
-                # Should not raise even when no channels are configured
-                manager.send("通知なし")
+            # Should not raise even when no channels are configured
+            manager.send("通知なし")
 
         self.assertEqual(len(dummy_requests.calls), 0)
+
+    def test_notification_manager_slack_only(self) -> None:
+        dummy_requests = DummyRequests()
+        env = {
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/slack-only",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(runner, "requests_module", dummy_requests):
+                manager = runner.build_notification_manager()
+
+                self.assertEqual(len(manager.channels), 1)
+                manager.send("Slack通知のみ")
+
+        self.assertEqual(len(dummy_requests.calls), 1)
+        call = dummy_requests.calls[0]
+        self.assertEqual(call["url"], env["SLACK_WEBHOOK_URL"])
+        self.assertEqual(call["json"], {"text": "Slack通知のみ"})
+        self.assertIsNone(call["headers"])
+        self.assertEqual(call["timeout"], 5)
+
+    def test_notification_manager_line_only_trims_targets(self) -> None:
+        dummy_requests = DummyRequests()
+        env = {
+            "LINE_CHANNEL_ACCESS_TOKEN": "token-xyz",
+            "LINE_TARGET_IDS": " U123 , ,U456,",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(runner, "requests_module", dummy_requests):
+                manager = runner.build_notification_manager()
+
+                self.assertEqual(len(manager.channels), 1)
+                manager.send("LINE通知のみ")
+
+        # Two valid target IDs should result in two calls
+        self.assertEqual(len(dummy_requests.calls), 2)
+
+        for call, target in zip(dummy_requests.calls, ["U123", "U456"]):
+            self.assertEqual(
+                call["headers"],
+                {
+                    "Authorization": f"Bearer {env['LINE_CHANNEL_ACCESS_TOKEN']}",
+                    "Content-Type": "application/json",
+                },
+            )
+            self.assertEqual(call["timeout"], 5)
+            self.assertEqual(call["json"]["to"], target)
+            self.assertEqual(
+                call["json"]["messages"][0],
+                {"type": "text", "text": "LINE通知のみ"},
+            )
+
+    def test_line_notification_requires_targets(self) -> None:
+        env = {
+            "LINE_CHANNEL_ACCESS_TOKEN": "token-xyz",
+            "LINE_TARGET_IDS": "   , ,",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            manager = runner.build_notification_manager()
+
+        self.assertEqual(len(manager.channels), 0)
+
+    def test_notification_manager_continues_after_channel_error(self) -> None:
+        failing_channel = mock.Mock()
+        failing_channel.name = "FailingChannel"
+        failing_channel.send = mock.Mock(side_effect=RuntimeError("boom"))
+
+        succeeding_channel = mock.Mock()
+        succeeding_channel.name = "SucceedingChannel"
+        succeeding_channel.send = mock.Mock()
+
+        manager = runner.NotificationManager([failing_channel, succeeding_channel])
+
+        # Should not raise even if one channel fails
+        manager.send("複数チャネル通知")
+
+        failing_channel.send.assert_called_once_with("複数チャネル通知")
+        succeeding_channel.send.assert_called_once_with("複数チャネル通知")
