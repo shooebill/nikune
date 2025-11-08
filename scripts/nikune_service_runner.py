@@ -57,7 +57,10 @@ except ImportError:
 LOGGER = logging.getLogger("nikune.service_runner")
 
 # 通知送信時のタイムアウト秒数（環境変数で上書き可能）
-NOTIFICATION_TIMEOUT = int(os.getenv("NIKUNE_NOTIFICATION_TIMEOUT", "5"))
+try:
+    NOTIFICATION_TIMEOUT = int(os.getenv("NIKUNE_NOTIFICATION_TIMEOUT", "5"))
+except (TypeError, ValueError):
+    NOTIFICATION_TIMEOUT = 5
 
 
 def _parse_command(default: Sequence[str]) -> List[str]:
@@ -240,10 +243,31 @@ def main() -> None:
 
     default_command = [sys.executable, "main.py", "--schedule"]
     command = _parse_command(default_command)
-    restart_delay = int(os.getenv("NIKUNE_RESTART_DELAY", "5"))
+
+    restart_delay_env = os.getenv("NIKUNE_RESTART_DELAY", "5")
+    try:
+        restart_delay = int(restart_delay_env)
+    except ValueError:
+        LOGGER.warning(
+            "Invalid NIKUNE_RESTART_DELAY value '%s'; falling back to default (5 seconds).",
+            restart_delay_env,
+        )
+        restart_delay = 5
+
     restart_on_success = _env_flag("NIKUNE_RESTART_ON_SUCCESS", default=False)
+
     max_restarts = os.getenv("NIKUNE_MAX_RESTARTS")
-    max_restart_count = int(max_restarts) if max_restarts else None
+    if max_restarts:
+        try:
+            max_restart_count = int(max_restarts)
+        except ValueError:
+            LOGGER.warning(
+                "NIKUNE_MAX_RESTARTS is set to a non-integer value (%r); falling back to unlimited restarts.",
+                max_restarts,
+            )
+            max_restart_count = None
+    else:
+        max_restart_count = None
 
     host = socket.gethostname()
     LOGGER.info("nikune service runner starting on host %s", host)
@@ -284,6 +308,7 @@ def main() -> None:
                 process.kill()
                 process.wait()
             return_code = 0
+            should_stop = True
 
         runtime = time.time() - start_time
         LOGGER.info("Process exited with code %s after %.1f seconds.", return_code, runtime)

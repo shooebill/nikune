@@ -415,10 +415,10 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
     <array>
       <string>/usr/bin/env</string>
       <string>python3</string>
-      <string>/Volumes/HDD4/nikune/scripts/nikune_service_runner.py</string>
+      <string>/path/to/nikune/scripts/nikune_service_runner.py</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Volumes/HDD4/nikune</string>
+    <string>/path/to/nikune</string>
     <key>EnvironmentVariables</key>
     <dict>
       <key>SLACK_WEBHOOK_URL</key>
@@ -427,14 +427,14 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/Volumes/HDD4/nikune/logs/nikune.launchd.log</string>
+    <string>/path/to/nikune/logs/nikune.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Volumes/HDD4/nikune/logs/nikune.launchd.err</string>
+    <string>/path/to/nikune/logs/nikune.launchd.err</string>
   </dict>
 </plist>
 ```
 
-2. ログ用ディレクトリが未作成なら `mkdir -p /Volumes/HDD4/nikune/logs`
+2. ログ用ディレクトリが未作成なら `mkdir -p /path/to/nikune/logs`
 3. `launchctl load ~/Library/LaunchAgents/com.nikune.bot.plist`
 4. 停止・再起動は `launchctl unload` / `launchctl kickstart` で実施
 
