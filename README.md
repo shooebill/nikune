@@ -379,3 +379,84 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
 - [ ] 投稿パフォーマンス分析
 - [ ] AI自動テンプレート生成
 - [ ] マルチアカウント対応
+
+## 🛡️ 自動起動と監視
+
+### 1. Slack 通知の準備
+- Slack の Incoming Webhook URL を取得し、環境変数 `SLACK_WEBHOOK_URL` に設定（任意で `SLACK_WEBHOOK_USERNAME`, `SLACK_WEBHOOK_ICON_EMOJI` も使用可）
+- 通知が不要な場合は設定不要（Webhook が未設定なら Slack 通知は送信されません）
+
+### 2. LINE 通知の準備（任意）
+- LINE Developers で Messaging API を構築し、チャネルアクセストークンを取得
+- `.env` などに `LINE_CHANNEL_ACCESS_TOKEN` を保存
+- 送信先となる `userId` や `groupId` を取得し、カンマ区切りで `LINE_TARGET_IDS` に設定
+  例: `LINE_TARGET_IDS=Uxxxxxxxxx,Uyyyyyyyyy`
+- どちらも未設定なら LINE 通知は送信されません
+
+### 3. サービスラッパーの利用
+- `python scripts/nikune_service_runner.py` でスケジューラーが常駐起動します
+- 既定では `main.py --schedule` を実行し、異常終了時に 5 秒待って自動再起動します
+- 主な環境変数
+  - `NIKUNE_SERVICE_COMMAND`: 実行コマンドを上書きしたい場合（例: `"uv run python main.py --schedule"`）
+  - `NIKUNE_RESTART_DELAY`: 再起動までの待機秒数（既定: 5）
+  - `NIKUNE_MAX_RESTARTS`: 再起動上限を設定したい場合
+
+### 4. macOS (launchd) で常駐起動
+1. `~/Library/LaunchAgents/com.nikune.bot.plist` を作成し、以下の内容を保存
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.nikune.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/bin/env</string>
+      <string>python3</string>
+      <string>/path/to/nikune/scripts/nikune_service_runner.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/path/to/nikune</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>SLACK_WEBHOOK_URL</key>
+      <string>https://hooks.slack.com/services/xxxxx/yyyyy/zzzzz</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/path/to/nikune/logs/nikune.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/nikune/logs/nikune.launchd.err</string>
+  </dict>
+</plist>
+```
+
+2. ログ用ディレクトリが未作成なら `mkdir -p /path/to/nikune/logs`
+3. `launchctl load ~/Library/LaunchAgents/com.nikune.bot.plist`
+4. 停止・再起動は `launchctl unload` / `launchctl kickstart` で実施
+
+### 5. Linux (systemd) への転用（参考）
+- `/etc/systemd/system/nikune.service` の例
+
+```
+[Unit]
+Description=nikune Twitter bot (scheduler)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nikune
+Environment=SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxxxx/yyyyy/zzzzz
+ExecStart=/usr/bin/python3 /opt/nikune/scripts/nikune_service_runner.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- `sudo systemctl daemon-reload && sudo systemctl enable --now nikune.service` で有効化
+- 詳細な監視条件や通知拡張は Slack 通知を基点に追加実装可能
