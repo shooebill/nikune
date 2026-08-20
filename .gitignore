@@ -22,8 +22,6 @@ check_code.sh
 .serena/
 .vscode/
 .idea/
-.flake8
-pyproject.toml
 cipher.yml
 data/cipher*
 
@@ -31,6 +29,7 @@ data/cipher*
 data/templates.db
 data/tweet_templates.tsv
 data/tweet_templates.generated.tsv
+data/quote_comments.tsv
 
 # Redis dump file
 dump.rdb

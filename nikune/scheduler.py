@@ -205,7 +205,7 @@ class SchedulerManager:
             if results["success"]:
                 logger.info("✅ Quote check completed:")
                 logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
-                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"   🍽️ Food-related found: {results['food_related_found']}")
                 logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
 
                 if results.get("skipped_rate_limit", 0) > 0:

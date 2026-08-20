@@ -3,10 +3,12 @@ nikune bot content generator
 お肉コメント生成機能（SQLite + Redis連携）
 """
 
+import csv
 import logging
 import random
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
@@ -66,6 +68,28 @@ class ContentGenerator:
         },
     }
 
+    # 食・レストラン関連キーワード（優先度別分類、お肉以外）
+    # MEAT_KEYWORDS_PRIORITYと同じ優先度体系（HIGH=3, MEDIUM=2, LOW=1）で、
+    # 対象カテゴリを食・レストラン全般に拡張する。誤検出を避けるため、
+    # 「ご飯」「美味しい」等の汎用語は含めず、具体的な料理名・シーン名詞のみ採用。
+    FOOD_KEYWORDS_PRIORITY: Dict[str, Dict[str, Any]] = {
+        "HIGH": {
+            "keywords": ["寿司", "フレンチ", "懐石", "鉄板焼き"],
+            "priority": 3,
+            "description": "特別・高品質な食体験",
+        },
+        "MEDIUM": {
+            "keywords": ["カレー", "ラーメン", "パスタ", "うどん", "そば", "餃子", "中華", "レストラン", "グルメ"],
+            "priority": 2,
+            "description": "一般的な料理・外食シーン",
+        },
+        "LOW": {
+            "keywords": ["お弁当", "ランチ", "居酒屋", "ファミレス", "コンビニごはん"],
+            "priority": 1,
+            "description": "日常的な食シーン",
+        },
+    }
+
     # 後方互換性のため、従来のMEAT_KEYWORDSも維持
     @property
     def MEAT_KEYWORDS(self) -> list[str]:
@@ -75,28 +99,19 @@ class ContentGenerator:
     # NGワード（設定ファイルから読み込み）
     NG_KEYWORDS = NG_KEYWORDS
 
-    # キーワード別コメントテンプレート（優先度順）
-    SPECIFIC_KEYWORD_COMMENTS = [
-        ("ステーキ", ["🥩 ステーキ美味しそう！", "🔥 ステーキ最高ですね！"]),
-        ("焼肉", ["🍖 焼肉いいな〜！", "🐻 焼肉パーティー楽しそう！"]),
-        ("ハンバーグ", ["🍴 ハンバーグ食べたい！", "😋 ジューシーで美味しそう！"]),
-        ("BBQ", ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"]),
-        ("バーベキュー", ["🔥 BBQ楽しそう！", "🥩 アウトドアでお肉最高！"]),
+    # --- 引用コメント文言について ---
+    # 実際の文言は非公開スプレッドシート（tweet_templateのpersonaタブ等）で起草・管理し、
+    # data/quote_comments.tsv（gitignore対象）としてエクスポートしたものを実行時に読み込む。
+    # ここに書かれているのはファイル未配置時の最小限フォールバックのみで、公開済みの
+    # docs/CHARACTER_PERSONA_SAMPLE.md 記載の口癖（肉ね！等）の範囲に留めている。
+    # 詳細は _load_quote_comments() を参照。
+    _FALLBACK_SPECIFIC_KEYWORD_COMMENTS: List[tuple[str, List[str]]] = [
+        ("ステーキ", ["肉ね！"]),
+        ("焼肉", ["肉だ！"]),
     ]
-
-    # デフォルトコメントテンプレート
-    DEFAULT_QUOTE_COMMENTS = [
-        "🐻 おいしそう！",
-        "🥩 お肉だ〜！食べたい！",
-        "😋 これは美味しそうですね〜",
-        "🤤 お肉愛が伝わってきます！",
-        "🐻💕 素敵なお肉ですね！",
-        "🥩✨ 美味しそうで羨ましいです！",
-        "🍴 いいですね〜食べてみたい！",
-        "🐻🥩 お肉最高〜！",
-        "😍 とても美味しそう！",
-        "🥩🔥 素晴らしいお肉ですね！",
-    ]
+    _FALLBACK_HIGH_PRIORITY_COMMENTS: List[str] = ["肉ね！", "肉よ！"]
+    _FALLBACK_MEDIUM_PRIORITY_COMMENTS: List[str] = ["肉ね！美味しそう！", "肉だ！"]
+    _FALLBACK_DEFAULT_QUOTE_COMMENTS: List[str] = ["肉ね！", "肉よ！", "肉しか見えない"]
 
     # 時間帯判定用設定（config/settings.pyから読み込み）
     MORNING_START = TIME_SETTINGS["MORNING_START"]
@@ -112,6 +127,9 @@ class ContentGenerator:
     JAPANESE_CHARS = r"\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF"
     # 単語境界パターン: 英数字または日本語文字以外
     WORD_BOUNDARY_PATTERN = rf"[^\w{JAPANESE_CHARS}]"
+
+    # 引用コメント文言のエクスポート先（非公開スプレッドシート由来、gitignore対象）
+    QUOTE_COMMENTS_FILE = "data/quote_comments.tsv"
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
@@ -137,16 +155,43 @@ class ContentGenerator:
             self._ng_pattern = None
             logger.warning("⚠️ NG word filtering disabled due to pattern compilation failure")
 
-        # お肉キーワードの正規表現パターンを事前コンパイル（パフォーマンス最適化v2）
+        # お肉キーワードは絵文字ルール（肉トピック判定）用に集合化しておく
+        self._meat_keyword_set = frozenset(self.MEAT_KEYWORDS)
+
+        # お肉＋食・レストランキーワードをレベル別にマージ（優先度別分類）
+        self._combined_keywords_priority: Dict[str, Dict[str, Any]] = self._merge_keyword_priorities(
+            self.MEAT_KEYWORDS_PRIORITY, self.FOOD_KEYWORDS_PRIORITY
+        )
+
+        # 食キーワード（お肉+食・レストラン）の正規表現パターンを事前コンパイル（パフォーマンス最適化v2）
         try:
-            self._meat_patterns: Dict[str, re.Pattern[str]] = self._compile_meat_patterns()
-            logger.info("✅ Meat keyword patterns pre-compiled for better performance")
+            self._food_patterns: Dict[str, re.Pattern[str]] = self._compile_food_patterns()
+            logger.info("✅ Food keyword patterns pre-compiled for better performance")
         except Exception as e:
-            logger.error(f"❌ Failed to compile meat patterns: {e}")
-            self._meat_patterns = {}
-            logger.warning("⚠️ Using fallback string matching for meat keywords")
+            logger.error(f"❌ Failed to compile food patterns: {e}")
+            self._food_patterns = {}
+            logger.warning("⚠️ Using fallback string matching for food keywords")
+
+        # 引用コメント文言を読み込み（非公開スプレッドシート由来のファイル、未配置時はフォールバック）
+        (
+            self._specific_keyword_comments,
+            self._high_priority_comments,
+            self._medium_priority_comments,
+            self._default_quote_comments,
+        ) = self._load_quote_comments()
 
         logger.info(f"✅ {self.bot_name} Content generator initialized")
+
+    @property
+    def high_priority_score(self) -> int:
+        """
+        食（お肉＋食・レストラン統合）のHIGH優先度スコア
+
+        呼び出し元（auto_quote_retweeter.py）が高優先度レート制限の閾値として参照する。
+        MEAT_KEYWORDS_PRIORITYのみでなく、統合後の_combined_keywords_priorityを参照する
+        ことで、お肉と食・レストランのHIGH優先度が将来的に異なる値になっても整合を保つ。
+        """
+        return int(self._combined_keywords_priority["HIGH"]["priority"])
 
     def _compile_ng_pattern(self) -> Optional[re.Pattern[str]]:
         """
@@ -178,9 +223,43 @@ class ContentGenerator:
         logger.debug(f"📋 Compiled unified NG word pattern with {len(self.NG_KEYWORDS)} keywords")
         return compiled
 
-    def _compile_meat_patterns(self) -> Dict[str, re.Pattern[str]]:
+    @staticmethod
+    def _merge_keyword_priorities(
+        *priority_dicts: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
         """
-        お肉キーワードの正規表現パターンを優先度別に事前コンパイル
+        複数の優先度別キーワード辞書（MEAT_KEYWORDS_PRIORITY形式）をレベル単位でマージ
+
+        同じレベル（HIGH/MEDIUM/LOW）のキーワードリストを結合・重複除去する。
+        priorityは各辞書で共通の値を前提とし、最初に見つかった値を採用する。
+
+        Args:
+            *priority_dicts: マージ対象の優先度別キーワード辞書（複数可）
+
+        Returns:
+            マージ後の優先度別キーワード辞書
+        """
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        for priority_dict in priority_dicts:
+            for level, data in priority_dict.items():
+                if level not in merged:
+                    merged[level] = {
+                        "keywords": [],
+                        "priority": data["priority"],
+                        "description": data["description"],
+                    }
+
+                existing_keywords: list[str] = merged[level]["keywords"]
+                for keyword in data["keywords"]:
+                    if keyword not in existing_keywords:
+                        existing_keywords.append(keyword)
+
+        return merged
+
+    def _compile_food_patterns(self) -> Dict[str, re.Pattern[str]]:
+        """
+        食キーワード（お肉＋食・レストラン）の正規表現パターンを優先度別に事前コンパイル
 
         Returns:
             優先度レベル別のコンパイル済み正規表現パターン辞書
@@ -190,7 +269,7 @@ class ContentGenerator:
         """
         compiled_patterns = {}
 
-        for level, priority_data in self.MEAT_KEYWORDS_PRIORITY.items():
+        for level, priority_data in self._combined_keywords_priority.items():
             keywords: list[str] = priority_data["keywords"]
             if not keywords:
                 continue
@@ -210,6 +289,105 @@ class ContentGenerator:
                 # 個別パターンでエラーが発生しても他のレベルは続行
 
         return compiled_patterns
+
+    def _load_quote_comments(
+        self,
+    ) -> "tuple[List[tuple[str, List[str]]], List[str], List[str], List[str]]":
+        """
+        引用コメント文言を読み込む
+
+        data/quote_comments.tsv（非公開スプレッドシート由来、gitignore対象）が存在すればそこから
+        読み込み、存在しなければ最小限のフォールバック（クラス定数）を使用する。
+
+        ファイル形式（タブ区切り、ヘッダー行あり）: bucket, keyword, text
+            - bucket: "specific" | "high" | "medium" | "default"
+            - keyword: bucket="specific" の時のみ使用（マッチしたキーワードとの照合に使う）
+            - text: コメント本文（絵文字は含めない。付与は _decorate_comment() が一元的に行う）
+
+        Returns:
+            (specific_keyword_comments, high_priority_comments,
+             medium_priority_comments, default_quote_comments) のタプル
+        """
+        if not Path(self.QUOTE_COMMENTS_FILE).exists():
+            logger.warning(
+                f"⚠️ 引用コメントファイルが見つかりませんでした: {self.QUOTE_COMMENTS_FILE}。"
+                "最小限のフォールバック文言を使用します。非公開スプレッドシートからエクスポートしてください。"
+            )
+            return (
+                list(self._FALLBACK_SPECIFIC_KEYWORD_COMMENTS),
+                list(self._FALLBACK_HIGH_PRIORITY_COMMENTS),
+                list(self._FALLBACK_MEDIUM_PRIORITY_COMMENTS),
+                list(self._FALLBACK_DEFAULT_QUOTE_COMMENTS),
+            )
+
+        specific_map: Dict[str, List[str]] = {}
+        high: List[str] = []
+        medium: List[str] = []
+        default: List[str] = []
+
+        try:
+            with open(self.QUOTE_COMMENTS_FILE, encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    bucket = (row.get("bucket") or "").strip()
+                    keyword = (row.get("keyword") or "").strip()
+                    text = (row.get("text") or "").strip()
+                    if not bucket or not text:
+                        continue
+
+                    if bucket == "specific" and keyword:
+                        specific_map.setdefault(keyword, []).append(text)
+                    elif bucket == "high":
+                        high.append(text)
+                    elif bucket == "medium":
+                        medium.append(text)
+                    elif bucket == "default":
+                        default.append(text)
+
+            specific = list(specific_map.items())
+
+            # 空のバケットはフォールバックで補完（部分的にしか記入されていない場合の保険）
+            if not specific:
+                specific = list(self._FALLBACK_SPECIFIC_KEYWORD_COMMENTS)
+            if not high:
+                high = list(self._FALLBACK_HIGH_PRIORITY_COMMENTS)
+            if not medium:
+                medium = list(self._FALLBACK_MEDIUM_PRIORITY_COMMENTS)
+            if not default:
+                default = list(self._FALLBACK_DEFAULT_QUOTE_COMMENTS)
+
+            logger.info(
+                f"✅ 引用コメントを読み込みました: specific={len(specific)}, "
+                f"high={len(high)}, medium={len(medium)}, default={len(default)}"
+            )
+            return specific, high, medium, default
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load quote comments from {self.QUOTE_COMMENTS_FILE}: {e}")
+            return (
+                list(self._FALLBACK_SPECIFIC_KEYWORD_COMMENTS),
+                list(self._FALLBACK_HIGH_PRIORITY_COMMENTS),
+                list(self._FALLBACK_MEDIUM_PRIORITY_COMMENTS),
+                list(self._FALLBACK_DEFAULT_QUOTE_COMMENTS),
+            )
+
+    def _decorate_comment(self, text: str, is_meat_topic: bool) -> str:
+        """
+        絵文字ルールを一元適用する
+
+        🐻を署名として文頭に1つ付与し、肉トピックの時のみ🥩🍖のどちらか1つを末尾に添える。
+        それ以外の装飾絵文字は付与しない（docs/CHARACTER_PERSONA_SAMPLE.md 絵文字ルール参照）。
+
+        Args:
+            text: 絵文字を含まない素のコメント本文
+            is_meat_topic: マッチしたキーワードにお肉語彙が含まれるか
+
+        Returns:
+            絵文字ルール適用後のコメント文字列
+        """
+        prefix = "🐻 "
+        suffix = f" {random.choice(('🥩', '🍖'))}" if is_meat_topic else ""
+        return f"{prefix}{text}{suffix}"
 
     def generate_tweet_content(self, category: Optional[str] = None, tone: Optional[str] = None) -> Optional[str]:
         """
@@ -477,30 +655,65 @@ class ContentGenerator:
             logger.error(f"❌ Error checking meat keywords: {e}")
             return False
 
-    def get_meat_keyword_score(self, text: str) -> Dict[str, Any]:
+    def is_food_related_tweet(self, text: str) -> bool:
         """
-        お肉関連ツイートの優先度スコアを計算（正規表現最適化版）
+        食関連（お肉＋食・レストラン全般）ツイートかどうか判定する。
+
+        is_meat_related_tweet()の一般化版。判定ロジックはお肉限定版と同様だが、
+        事前コンパイル済みの正規表現パターン（self._food_patterns）を使う点が異なる
+        （get_food_keyword_score()と同じ最適化を流用し、キーワード増加時のスキャン
+        コストを抑える）。
+
+        Args:
+            text (str): 判定対象のツイート本文
+
+        Returns:
+            bool: 食関連ツイートの場合True、そうでなければFalse
+        """
+        try:
+            # NGワードチェック
+            if self._ng_pattern and self._ng_pattern.search(text):
+                logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
+                return False
+
+            # 事前コンパイル済み正規表現を使用（パフォーマンス向上）
+            if self._food_patterns:
+                return any(pattern.search(text) for pattern in self._food_patterns.values())
+
+            # フォールバック版: パターンのコンパイルに失敗している場合のみ文字列検索
+            all_food_keywords = [kw for v in self._combined_keywords_priority.values() for kw in v["keywords"]]
+            return any(keyword in text for keyword in all_food_keywords)
+
+        except Exception as e:
+            logger.error(f"❌ Error checking food keywords: {e}")
+            return False
+
+    def get_food_keyword_score(self, text: str) -> Dict[str, Any]:
+        """
+        食関連（お肉＋食・レストラン全般）ツイートの優先度スコアを計算（正規表現最適化版）
 
         Args:
             text (str): 判定対象のツイート本文
 
         Returns:
             Dict[str, Any]: スコア情報を含む辞書
-                - is_meat_related: bool - お肉関連かどうか
+                - is_food_related: bool - 食関連かどうか
                 - score: int - 優先度スコア（0-3、3が最高）
                 - matched_keywords: List[str] - マッチしたキーワードリスト
                 - highest_priority_level: str - 最高優先度レベル
+                - is_meat_topic: bool - マッチしたキーワードにお肉語彙が含まれるか（絵文字ルール判定用）
         """
         try:
             # NGワードチェック（事前コンパイル済み正規表現使用）
             if self._ng_pattern and self._ng_pattern.search(text):
                 logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
                 return {
-                    "is_meat_related": False,
+                    "is_food_related": False,
                     "score": 0,
                     "matched_keywords": [],
                     "highest_priority_level": "NONE",
                     "ng_word_detected": True,
+                    "is_meat_topic": False,
                 }
 
             matched_keywords = []
@@ -508,12 +721,12 @@ class ContentGenerator:
             highest_priority_level = "NONE"
 
             # 事前コンパイル済み正規表現を使用（パフォーマンス向上）
-            if self._meat_patterns:
+            if self._food_patterns:
                 # 最適化版: 正規表現パターンマッチング
-                for level, pattern in self._meat_patterns.items():
+                for level, pattern in self._food_patterns.items():
                     matches = pattern.findall(text)
                     if matches:
-                        priority_data = self.MEAT_KEYWORDS_PRIORITY[level]
+                        priority_data = self._combined_keywords_priority[level]
                         priority = int(priority_data["priority"])
                         matched_keywords.extend(matches)
 
@@ -522,8 +735,8 @@ class ContentGenerator:
                             highest_priority_level = level
             else:
                 # フォールバック版: 文字列検索
-                logger.debug("🔄 Using fallback string matching for meat keywords")
-                for level, priority_data in self.MEAT_KEYWORDS_PRIORITY.items():
+                logger.debug("🔄 Using fallback string matching for food keywords")
+                for level, priority_data in self._combined_keywords_priority.items():
                     keywords: list[str] = priority_data["keywords"]
                     level_priority: int = priority_data["priority"]
 
@@ -534,43 +747,47 @@ class ContentGenerator:
                                 max_priority = level_priority
                                 highest_priority_level = level
 
-            is_meat_related = len(matched_keywords) > 0
+            is_food_related = len(matched_keywords) > 0
+            deduped_keywords = list(set(matched_keywords))
+            is_meat_topic = any(keyword in self._meat_keyword_set for keyword in deduped_keywords)
 
-            if is_meat_related:
+            if is_food_related:
                 logger.debug(
-                    f"🥩 Meat keywords detected: {matched_keywords} "
-                    f"(Priority: {highest_priority_level}, Score: {max_priority})"
+                    f"🍽️ Food keywords detected: {matched_keywords} "
+                    f"(Priority: {highest_priority_level}, Score: {max_priority}, Meat topic: {is_meat_topic})"
                 )
 
             return {
-                "is_meat_related": is_meat_related,
+                "is_food_related": is_food_related,
                 "score": max_priority,
-                "matched_keywords": list(set(matched_keywords)),  # 重複除去
+                "matched_keywords": deduped_keywords,  # 重複除去
                 "highest_priority_level": highest_priority_level,
                 "ng_word_detected": False,
+                "is_meat_topic": is_meat_topic,
             }
 
         except Exception as e:
-            logger.error(f"❌ Error calculating meat keyword score: {e}")
+            logger.error(f"❌ Error calculating food keyword score: {e}")
             return {
-                "is_meat_related": False,
+                "is_food_related": False,
                 "score": 0,
                 "matched_keywords": [],
                 "highest_priority_level": "NONE",
                 "ng_word_detected": False,
+                "is_meat_topic": False,
             }
 
     def generate_quote_comment(self, original_tweet_text: str) -> str:
-        """お肉関連ツイート用のコメント生成（優先度対応版）"""
+        """食関連ツイート用のコメント生成（優先度対応版）"""
         try:
             # キーワードの優先度スコアを取得
-            score_info = self.get_meat_keyword_score(original_tweet_text)
+            score_info = self.get_food_keyword_score(original_tweet_text)
 
-            if not score_info["is_meat_related"]:
-                logger.warning("⚠️ Trying to generate comment for non-meat-related tweet")
-                return "🐻 お肉〜！"  # フォールバック
+            if not score_info["is_food_related"]:
+                logger.warning("⚠️ Trying to generate comment for non-food-related tweet")
+                return self._decorate_comment("肉ね！", is_meat_topic=True)  # フォールバック
 
-            # 優先度レベルに基づいてコメント選択
+            # 優先度レベルに基づいてコメント選択（絵文字を含まない素のテキスト）
             base_comment = self._select_comment_by_priority(
                 score_info["highest_priority_level"], score_info["matched_keywords"], original_tweet_text
             )
@@ -579,7 +796,8 @@ class ContentGenerator:
             current_hour = datetime.now().hour
             time_comment = self._get_time_based_comment(current_hour, score_info["score"])
 
-            final_comment = base_comment + time_comment
+            # 絵文字ルールを一元適用（🐻署名＋肉トピック時のみ🥩🍖）
+            final_comment = self._decorate_comment(base_comment + time_comment, score_info["is_meat_topic"])
 
             logger.info(f"✅ Generated quote comment: {final_comment}")
             logger.info(f"📝 Priority: {score_info['highest_priority_level']} (Score: {score_info['score']})")
@@ -589,62 +807,55 @@ class ContentGenerator:
 
         except Exception as e:
             logger.error(f"❌ Error generating quote comment: {e}")
-            return "🐻 お肉〜！"  # フォールバック
+            return self._decorate_comment("肉ね！", is_meat_topic=True)  # フォールバック
 
     def _select_comment_by_priority(self, priority_level: str, matched_keywords: List[str], original_text: str) -> str:
-        """優先度レベルに基づいてコメントを選択"""
-        try:
-            # 高優先度キーワード用の特別なコメント
-            if priority_level == "HIGH":
-                high_priority_comments = [
-                    "🥩✨ 素晴らしいお肉料理ですね！",
-                    "😍 高級感あふれるお肉！羨ましいです！",
-                    "🐻💕 これは贅沢なお肉ですね〜",
-                    "🔥 最高級のお肉！とても美味しそう！",
-                    "🥩👑 特別なお肉料理に感動です！",
-                ]
-                return random.choice(high_priority_comments)
+        """
+        優先度レベルに基づいてコメントを選択（絵文字を含まない素のテキストを返す）
 
-            # 特定キーワードに対する専用コメント
-            for keyword, comments in self.SPECIFIC_KEYWORD_COMMENTS:
+        絵文字の付与は行わない。呼び出し元（generate_quote_comment）が
+        _decorate_comment() で一元的に絵文字ルールを適用する。
+        """
+        try:
+            # 特定キーワードに対する専用コメント（優先度レベルより先に判定する。
+            # HIGH優先度キーワードの多くはこちらの対象でもあるため、先に判定しないと
+            # 専用コメントが選ばれることがなくなってしまう）
+            for keyword, comments in self._specific_keyword_comments:
                 if keyword in matched_keywords:
                     return random.choice(comments)
 
+            # 高優先度キーワード用の特別なコメント
+            if priority_level == "HIGH":
+                return random.choice(self._high_priority_comments)
+
             # 中優先度用のコメント
             if priority_level == "MEDIUM":
-                medium_priority_comments = [
-                    "🥩 美味しそうなお肉ですね！",
-                    "🐻 お肉愛が伝わってきます！",
-                    "😋 これは食べてみたいです〜",
-                    "🍴 素敵なお肉料理ですね！",
-                    "🥩🔥 お肉最高！",
-                ]
-                return random.choice(medium_priority_comments)
+                return random.choice(self._medium_priority_comments)
 
             # 低優先度・デフォルト用のコメント
-            return random.choice(self.DEFAULT_QUOTE_COMMENTS)
+            return random.choice(self._default_quote_comments)
 
         except Exception as e:
             logger.error(f"❌ Error selecting comment by priority: {e}")
-            return random.choice(self.DEFAULT_QUOTE_COMMENTS)
+            return random.choice(self._default_quote_comments)
 
     def _get_time_based_comment(self, current_hour: int, priority_score: int) -> str:
-        """時間帯と優先度に基づいて追加コメントを生成"""
+        """時間帯と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）"""
         try:
             base_time_comment = ""
 
             if self.MORNING_START <= current_hour < self.MORNING_END:
-                base_time_comment = " 朝からお肉いいですね〜"
+                base_time_comment = " 朝から幸せね〜"
             elif self.LUNCH_START <= current_hour < self.LUNCH_END:
-                base_time_comment = " お昼のお肉タイム！"
+                base_time_comment = " お昼にちょうどいいわね！"
             elif self.DINNER_START <= current_hour < self.DINNER_END:
-                base_time_comment = " 夕食が楽しみになります！"
+                base_time_comment = " 夜ご飯が楽しみだ！"
             else:
                 # 夜間や早朝の場合、優先度が高ければ特別コメント
                 if priority_score >= 3:
-                    base_time_comment = " 特別なお肉ですね〜！"
+                    base_time_comment = " 特別ね〜！"
                 elif priority_score >= 2:
-                    base_time_comment = " お肉好きにはたまらないです！"
+                    base_time_comment = " たまらないわね！"
 
             return base_time_comment
 

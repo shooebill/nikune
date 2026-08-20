@@ -73,8 +73,8 @@ class AutoQuoteRetweeter:
         self.min_priority_score = QUOTE_RETWEET_MIN_PRIORITY_SCORE
         self.high_priority_limit = QUOTE_RETWEET_HIGH_PRIORITY_LIMIT
         self.high_priority_quotes_in_hour: List[datetime] = []
-        # HIGH優先度のスコア値を取得（MEAT_KEYWORDS_PRIORITYから動的に取得）
-        self.high_priority_score = self.content_generator.MEAT_KEYWORDS_PRIORITY["HIGH"]["priority"]
+        # HIGH優先度のスコア値を取得（お肉＋食・レストラン統合後の優先度から動的に取得）
+        self.high_priority_score = self.content_generator.high_priority_score
 
         # 自分のユーザーIDをキャッシュ（遅延初期化でRate Limit対策）
         self.my_user_id: Optional[str] = None
@@ -128,7 +128,7 @@ class AutoQuoteRetweeter:
             results: Dict[str, Any] = {
                 "success": False,
                 "checked_tweets": 0,
-                "meat_related_found": 0,
+                "food_related_found": 0,
                 "quote_posted": 0,
                 "skipped_rate_limit": 0,
                 "errors": [],
@@ -177,16 +177,16 @@ class AutoQuoteRetweeter:
                     if self._is_own_tweet(tweet):
                         continue
 
-                    # お肉関連ツイートかチェック（優先度スコアリング対応）
-                    score_info = self.content_generator.get_meat_keyword_score(tweet.text)
+                    # 食関連ツイートかチェック（お肉＋食・レストラン全般、優先度スコアリング対応）
+                    score_info = self.content_generator.get_food_keyword_score(tweet.text)
 
-                    if score_info["is_meat_related"]:
-                        results["meat_related_found"] += 1
+                    if score_info["is_food_related"]:
+                        results["food_related_found"] += 1
                         priority_level = score_info["highest_priority_level"]
                         score = score_info["score"]
                         keywords = score_info["matched_keywords"]
 
-                        logger.info(f"🥩 Found meat-related tweet: {tweet.id}")
+                        logger.info(f"🍽️ Found food-related tweet: {tweet.id}")
                         logger.info(f"🎯 Priority: {priority_level} (Score: {score})")
                         logger.info(f"🔍 Keywords: {keywords}")
                         logger.info(f"💬📝 Content: {tweet.text[:100]}...")
@@ -379,6 +379,18 @@ class AutoQuoteRetweeter:
                 text="焼肉パーティーしました🍖みんなでワイワイ楽しかった〜",
                 author_id="mock_user_5",
                 created_at="2024-10-29T08:00:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_6",
+                text="寿司ランチに行ってきました！美味しかった〜",
+                author_id="mock_user_6",
+                created_at="2024-10-29T07:30:00.000Z",
+            ),
+            SimpleNamespace(
+                id="mock_tweet_7",
+                text="カレーライス作りました！スパイシーで美味しい",
+                author_id="mock_user_7",
+                created_at="2024-10-29T07:00:00.000Z",
             ),
         ]
 
