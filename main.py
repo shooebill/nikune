@@ -334,7 +334,7 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
             if results["success"]:
                 logger.info("✅ Quote retweet check completed:")
                 logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
-                logger.info(f"   🥩 Meat-related found: {results['meat_related_found']}")
+                logger.info(f"   🍽️ Food-related found: {results['food_related_found']}")
                 logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
 
                 errors = results.get("errors", [])
