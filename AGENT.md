@@ -1,127 +1,110 @@
-# VS Code Agent Settings for Nikune Project
+# Agent Settings for Nikune Project
+
+nikune: 「お肉」偏愛キャラクターのTwitter bot。Python + uv管理。
 
 ## Project Commands
 
 ### Development
-```bash
-# All commands use uv for automatic dependency management
-# No manual virtual environment activation needed!
 
-# System test (recommended first run)
+すべて `uv run` 経由（venv手動activate不要、uvが自動管理）。
+
+```bash
+# システムテスト（初回推奨）
 uv run python main.py --test
 
-# System health check
+# システムヘルスチェック
 uv run python main.py --health
 
-# Post tweet immediately
+# 即座に1回投稿
 uv run python main.py --post-now
-
-# Post with specific category
 uv run python main.py --post-now --category お肉
 
-# Quote retweet check
+# 引用リツイートチェック（お肉＋食・レストラン全般を検出）
 uv run python main.py --quote-check
+uv run python main.py --quote-check --dry-run   # API呼び出しなしのドライラン
 
-# Quote retweet check (dry run - no API calls)
-uv run python main.py --quote-check --dry-run
-
-# Start scheduler (runs continuously)
+# スケジューラー起動（継続実行、9:00/13:30/19:00投稿）
 uv run python main.py --schedule
 
-# Setup database with sample data
+# DBセットアップ
 uv run python main.py --setup-db
+uv run python main.py --setup-db --file data/custom.tsv
 
-# Import from CSV
-uv run python main.py --setup-db --csv data/templates.csv
-
-# Manual dependency management (if needed)
-uv add <package>        # Add package
-uv remove <package>     # Remove package  
-uv sync                 # Sync dependencies
+# 依存関係管理
+uv add <package>
+uv remove <package>
+uv sync
 ```
 
 ### Code Quality
+
 ```bash
-# Format code (uv automatically manages dependencies)
+# 一括チェック（black → isort → flake8 → mypy → mypy --strict → pytest）
+./check_code.sh
+
+# 個別実行
 uv run black .
-
-# Sort imports
 uv run isort .
-
-# Run both formatting commands
-uv run isort . && uv run black .
-
-# Lint code
-uv run flake8 .
-
-# Type check
-uv run mypy nikune/
+uv run flake8 nikune/ main.py config/ tests/
+uv run mypy .
+uv run mypy --strict .
 ```
 
 ### Testing
+
 ```bash
-# Run tests
-uv run pytest
-
-# Run tests with coverage
-uv run pytest --cov=nikune
-
-# Run specific test
-uv run pytest tests/test_specific.py
+uv run pytest tests/
+uv run pytest tests/test_content_generator.py -v
 ```
 
 ## Environment Setup Notes
 
-- **Package Management**: Uses `uv` for ultra-fast dependency management (replaces pip/venv)
-- **Python Version**: Requires Python 3.13.x (automatically managed by uv)
-- **Virtual Environment**: Automatically created/managed by uv (no manual activation needed)
-- **Twitter API credentials**: Store in `.env` file in project root
-- **Main dependencies**: tweepy, schedule, requests, python-dotenv, redis
-- **Database**: SQLite (persistent) + Redis (caching/session management)
-- **Development tools**: black, isort, flake8, mypy (all managed via pyproject.toml)
+- **パッケージ管理**: `uv`（pip/venvの代替）。Python 3.13.x
+- **仮想環境**: uvが自動作成・管理（手動activate不要）
+- **Twitter API資格情報**: `.env`（プロジェクトルート、gitignore対象）
+- **主要依存**: tweepy, schedule, requests, python-dotenv, redis
+- **データベース**: SQLite（永続化）＋ Redis（キャッシュ・重複防止）。Redisは`brew services start redis`等で事前起動が必要
+- **開発ツール設定**: `pyproject.toml`（black line-length=120, isort, mypy）／`.flake8`（max-line-length=120）。どちらもリポジトリにコミット済みの共有設定
+- **NGワード**: `NG_KEYWORDS`環境変数または`ng_keywords.txt`で設定。**2026-08-20時点で未設定**（本番未デプロイのドライラン運用のため実害なし）。本番投稿を開始する前に必ず設定すること
 
 ## Project Structure
 
-- `nikune/` - Main package with core modules
-  - `twitter_client.py` - Twitter API integration (完成)
-  - `database.py` - SQLite + Redis database management (完成)
-  - `content_generator.py` - Tweet content generation (完成)
-  - `scheduler.py` - Tweet scheduling system (完成)
-  - `health_check.py` - System health monitoring (完成)
-- `config/` - Configuration and settings
-  - `settings.py` - Environment variable management (完成)
-- `main.py` - Application entry point with CLI (完成)
-- `data/` - Database and CSV files storage
-- `requirements.txt` - Python dependencies
-- `.env` - Twitter API credentials (create manually)
+```
+nikune/                        # メインパッケージ
+  twitter_client.py            # Twitter API連携
+  database.py                  # SQLite + Redis
+  content_generator.py         # ツイート/コメント生成（食・レストラン検出ロジック含む）
+  auto_quote_retweeter.py      # 自動引用リツイート
+  scheduler.py                 # 定期投稿スケジューラー
+  health_check.py              # システムヘルスチェック
+  utils.py                     # 共通ユーティリティ
+config/
+  settings.py                  # 環境変数管理
+scripts/
+  nikune_service_runner.py     # 自動起動・Slack/LINE通知（NotificationManager）
+docs/
+  CHARACTER_PERSONA_SAMPLE.md  # キャラクターペルソナのサンプル（本番の正ではない、下記参照）
+tests/
+  test_content_generator.py
+  test_auto_quote_retweeter.py
+  test_nikune_service_runner.py
+data/                          # DB・テンプレートファイル
+  category.tsv / tone.tsv / sample_templates.tsv   # マスタデータ（コミット対象）
+  tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / templates.db
+                                # 実データ（gitignore対象、非公開Google Sheet「tweet_template」由来）
+main.py                        # CLIエントリーポイント
+check_code.sh                  # 品質チェック一括実行スクリプト
+```
 
-## Development Status
+## キャラクターペルソナについて
 
-✅ **Project Complete & Production Ready**
+`docs/CHARACTER_PERSONA_SAMPLE.md`はこのコードベースが特定のペルソナに固定されていないことを示す**サンプル**。実際に稼働中のnikuneの本番ペルソナ・ツイート候補文言は、非公開のGoogle Sheet「tweet_template」（`persona`/`tweet_templates`/`category`/`tone`タブ）で管理している。`data/quote_comments.tsv`（gitignore対象）はこのシートのエクスポートで、引用コメント生成時に読み込む。未配置時はペルソナサンプルに公開済みの口癖のみを使った最小限のフォールバックで動作する。
 
-All core functionalities implemented and tested:
-- Twitter API integration with posting, retweeting, liking
-- **🆕 Auto Quote Retweet**: Automatically quote tweets meat-related content from followed users
-- Dual database system (SQLite + Redis) with duplicate prevention
-- Dynamic content generation with time-based placeholders
-- Flexible scheduling system (default: 9:00, 13:30, 19:00 daily)
-- **🆕 Rate Limiting**: Smart rate limiting (2 quotes/hour, 30min intervals)
-- **🆕 Dry Run Mode**: Test functionality without API calls using mock data
-- System health monitoring and diagnostics
-- Comprehensive CLI interface for all operations
-- CSV import/export for template management
-- Full error handling and logging
-- **🆕 UV Package Management**: Ultra-fast dependency management with Python 3.13.x
+## Development Status（2026-08-20時点）
 
-Ready for production deployment! 🐻🍖
-
-### Recent Updates (v2 - Priority System)
-- **🆕 Keyword Priority System**: 3-tier priority scoring (HIGH/MEDIUM/LOW) for intelligent tweet filtering
-- **🆕 Smart Comment Generation**: Priority-based comment selection with enhanced personalization
-- **🆕 High Priority Rate Limiting**: Separate rate limits for premium content (3 high-priority/hour)
-- **🆕 Performance Optimization**: Pre-compiled regex patterns for faster keyword detection
-- **🆕 Advanced Error Handling**: Robust retry logic with exponential backoff
-- **Auto Quote Retweet System**: Detects meat-related tweets and adds thoughtful comments
-- **Mock Timeline for Testing**: API-free testing with realistic mock data
-- **Enhanced Rate Limiting**: Prevents Twitter API violations with smart throttling
-- **UV Integration**: Modern Python tooling for faster development workflow
+- 基本機能（定期投稿、引用リツイート、DB、スケジューラー、ヘルスチェック）は実装済み
+- 引用リツイートの検出対象を「お肉」から**食・レストラン全般**（寿司・カレー・ラーメン等）に拡張済み
+- キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
+- テスト: `tests/`に30件（content_generator/auto_quote_retweeter/service_runnerの3ファイル）
+- **本番デプロイはまだ行っていない**（ドライラン運用のみ）。ストリームB「軽量」扱いで2026-08-31にgo/no-go判断予定
+- 既知の未対応事項: NGワード未設定、季節限定カテゴリ（クリスマス等）の日付フィルタ未実装、通常投稿の絵文字（`_get_random_emoji()`）がペルソナの絵文字ルール未準拠

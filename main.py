@@ -397,7 +397,7 @@ def main() -> None:
   python main.py --post-now --category お肉 # カテゴリ指定で投稿
   python main.py --post-now --text "こんにちは！" # カスタムテキストで投稿
   python main.py --post-now --text "テスト" --dry-run # カスタムテキストのドライラン
-  python main.py --quote-check              # お肉関連ツイートをチェック・Quote Retweet
+  python main.py --quote-check              # 食関連ツイート（お肉＋食・レストラン）をチェック・Quote Retweet
   python main.py --quote-check --dry-run    # Quote Retweetのドライラン
   python main.py --schedule                # スケジューラー開始
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
@@ -410,7 +410,9 @@ def main() -> None:
     group.add_argument("--test", action="store_true", help="全コンポーネントのテスト実行")
     group.add_argument("--health", action="store_true", help="システム健全性チェック")
     group.add_argument("--post-now", action="store_true", help="即座に1回ツイート投稿")
-    group.add_argument("--quote-check", action="store_true", help="お肉関連ツイートをチェック・Quote Retweet")
+    group.add_argument(
+        "--quote-check", action="store_true", help="食関連ツイート（お肉＋食・レストラン）をチェック・Quote Retweet"
+    )
     group.add_argument("--schedule", action="store_true", help="スケジューラーを開始")
     group.add_argument("--setup-db", action="store_true", help="データベースセットアップ")
 
