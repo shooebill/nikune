@@ -146,13 +146,14 @@ class AutoQuoteRetweeter:
                 timeline_tweets = self._get_mock_timeline()
                 logger.info("🎭 Using mock timeline data for dry run")
             else:
-                fetched_tweets = self._fetch_timeline_with_retry()
-                if fetched_tweets is None:
-                    # リトライ後も失敗した場合
-                    results["success"] = True
-                    results["errors"].append("Timeline fetch failed after retries")
-                    return results
-                timeline_tweets = fetched_tweets
+                # フォロー中タイムライン＋検索APIのハイブリッド探索
+                # （フォロー数が少なくても、検索APIがフォロー関係に依存せず候補を補完する）
+                fetched_tweets = self._fetch_timeline_with_retry() or []
+                if not fetched_tweets:
+                    results["errors"].append("Timeline fetch failed or empty after retries")
+
+                search_tweets = self._fetch_search_candidates()
+                timeline_tweets = fetched_tweets + search_tweets
 
             if not timeline_tweets:
                 logger.info("📭 No tweets found in timeline")
@@ -203,12 +204,15 @@ class AutoQuoteRetweeter:
 
                         # コメント生成（優先度対応版）
                         comment = self.content_generator.generate_quote_comment(tweet.text)
+                        author_username = getattr(tweet, "author_username", None)
 
                         if self.dry_run:
-                            logger.info(f"🔄 [DRY RUN] Would quote tweet with comment: {comment}")
+                            pseudo_url = f"https://x.com/{author_username or 'unknown'}/status/{tweet.id}"
+                            logger.info(f"🔄 [DRY RUN] Would post pseudo quote tweet: {comment} {pseudo_url}")
                         else:
-                            # Quote Tweet実行
-                            quote_id = self.twitter_client.quote_tweet(tweet.id, comment)
+                            # 疑似引用リツイート実行（quote_tweet_idはセルフサーブAPIで403のため、
+                            # コメント+対象ツイートURL方式を使用。詳細はTwitterClient.pseudo_quote_tweet参照）
+                            quote_id = self.twitter_client.pseudo_quote_tweet(tweet.id, author_username, comment)
                             if quote_id:
                                 results["quote_posted"] += 1
                                 self.last_quote_time = datetime.now()
@@ -314,6 +318,27 @@ class AutoQuoteRetweeter:
 
         return None
 
+    def _build_food_search_query(self) -> str:
+        """食（お肉＋食・レストラン統合）キーワードから検索APIのクエリを組み立てる"""
+        keywords = self.content_generator.all_food_keywords
+        query_terms = " OR ".join(keywords)
+        return f"({query_terms}) -is:retweet -is:reply lang:ja"
+
+    def _fetch_search_candidates(self, max_results: int = 10) -> List[Any]:
+        """
+        検索APIによる食関連ツイートの候補取得（フォロー数に依存しないハイブリッド探索の補完）
+
+        フォロー中タイムラインとは異なり必須の経路ではないため、失敗しても
+        致命的エラーとはせず、空リストを返してタイムライン側の結果のみで続行する。
+        """
+        try:
+            query = self._build_food_search_query()
+            tweets = self.twitter_client.search_recent_food_tweets(query, max_results=max_results)
+            return tweets or []
+        except Exception as e:
+            logger.warning(f"⚠️ Search candidate fetch failed (continuing with timeline only): {e}")
+            return []
+
     def _is_own_tweet(self, tweet: Any) -> bool:
         """自分のツイートかどうかチェック（遅延初期化でRate Limit対策）"""
         try:
@@ -354,42 +379,49 @@ class AutoQuoteRetweeter:
 是非ご賞味くださいませ。#akiba"""
                 ),
                 author_id="mock_user_1",
+                author_username="mock_user_1",
                 created_at="2024-10-29T10:00:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_2",
                 text="今日は良い天気ですね〜お散歩日和です",
                 author_id="mock_user_2",
+                author_username="mock_user_2",
                 created_at="2024-10-29T09:30:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_3",
                 text="美味しいステーキを食べました🥩とても柔らかくて最高でした！",
                 author_id="mock_user_3",
+                author_username="mock_user_3",
                 created_at="2024-10-29T09:00:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_4",
                 text="プログラミングの勉強中です。Pythonは楽しいですね",
                 author_id="mock_user_4",
+                author_username="mock_user_4",
                 created_at="2024-10-29T08:30:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_5",
                 text="焼肉パーティーしました🍖みんなでワイワイ楽しかった〜",
                 author_id="mock_user_5",
+                author_username="mock_user_5",
                 created_at="2024-10-29T08:00:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_6",
                 text="寿司ランチに行ってきました！美味しかった〜",
                 author_id="mock_user_6",
+                author_username="mock_user_6",
                 created_at="2024-10-29T07:30:00.000Z",
             ),
             SimpleNamespace(
                 id="mock_tweet_7",
                 text="カレーライス作りました！スパイシーで美味しい",
                 author_id="mock_user_7",
+                author_username="mock_user_7",
                 created_at="2024-10-29T07:00:00.000Z",
             ),
         ]

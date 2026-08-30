@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
+from nikune.twitter_client import TwitterClient
 
 
 def _make_retweeter() -> AutoQuoteRetweeter:
@@ -96,3 +97,40 @@ class MockTimelineFoodExpansionTests(TestCase):
 
         self.assertTrue(results["success"])
         self.assertEqual(results["food_related_found"], 0)
+
+
+class PseudoQuoteTweetTests(TestCase):
+    """quote_tweet_idが使用不可(セルフサーブAPIで403)なため導入した疑似引用リツイート方式のテスト"""
+
+    def test_pseudo_quote_tweet_dry_run_returns_mock_id(self) -> None:
+        client = TwitterClient(dry_run=True)
+        result = client.pseudo_quote_tweet("123", "someuser", "肉ね！")
+
+        self.assertEqual(result, "mock_tweet_id")
+
+    def test_pseudo_quote_tweet_without_author_username_fails_gracefully(self) -> None:
+        client = TwitterClient(dry_run=True)
+        result = client.pseudo_quote_tweet("123", None, "肉ね！")
+
+        self.assertIsNone(result)
+
+
+class FoodSearchQueryTests(TestCase):
+    """フォロー関係に依存しない検索API探索（ハイブリッド方式）のクエリ組み立てテスト"""
+
+    def test_build_food_search_query_includes_keywords_and_filters(self) -> None:
+        retweeter = _make_retweeter()
+        query = retweeter._build_food_search_query()
+
+        self.assertIn("肉", query)
+        self.assertIn("寿司", query)
+        self.assertIn("OR", query)
+        self.assertIn("-is:retweet", query)
+        self.assertIn("lang:ja", query)
+
+    def test_fetch_search_candidates_returns_empty_list_on_failure(self) -> None:
+        retweeter = _make_retweeter()
+        with mock.patch.object(retweeter.twitter_client, "search_recent_food_tweets", side_effect=RuntimeError("boom")):
+            candidates = retweeter._fetch_search_candidates()
+
+        self.assertEqual(candidates, [])

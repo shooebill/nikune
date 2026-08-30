@@ -193,6 +193,16 @@ class ContentGenerator:
         """
         return int(self._combined_keywords_priority["HIGH"]["priority"])
 
+    @property
+    def all_food_keywords(self) -> List[str]:
+        """
+        食（お肉＋食・レストラン統合）の全キーワードをフラットなリストで返す
+
+        呼び出し元（auto_quote_retweeter.py）が検索API（フォロー関係に依存しない
+        候補探索）のクエリを組み立てる際に参照する。
+        """
+        return [kw for v in self._combined_keywords_priority.values() for kw in v["keywords"]]
+
     def _compile_ng_pattern(self) -> Optional[re.Pattern[str]]:
         """
         NGワードの正規表現パターンを1つにまとめてコンパイル
