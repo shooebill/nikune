@@ -5,6 +5,7 @@ Twitter APIとの接続、ツイート投稿などを担当
 
 import logging
 import unicodedata
+from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import tweepy
@@ -15,10 +16,13 @@ from config.settings import (
     TWITTER_ACCESS_TOKEN_SECRET,
     TWITTER_API_KEY,
     TWITTER_API_SECRET,
+    TWITTER_BEARER_TOKEN,
 )
 
 # 定数定義
-MAX_QUOTE_COMMENT_LENGTH = 250  # Quote comment の最大文字数（Twitter280文字制限から引用URL約23文字を考慮）
+# 疑似引用リツイート（コメント+URL方式）のコメント最大文字数
+# （Twitter280文字制限から、URL短縮後の約23文字＋区切りスペースを考慮）
+MAX_QUOTE_COMMENT_LENGTH = 250
 
 
 def _safe_text_length(text: str) -> int:
@@ -39,6 +43,38 @@ def _safe_text_length(text: str) -> int:
     # NFCで正規化（結合文字を正規化）
     normalized = unicodedata.normalize("NFC", text)
     return len(normalized)
+
+
+def _truncate_comment(comment: str, max_length: int) -> str:
+    """
+    Unicode安全な文字数チェックを行い、上限を超える場合は安全に切り詰める
+
+    Args:
+        comment: 対象コメント
+        max_length: 最大文字数
+
+    Note:
+        結合文字・絵文字を考慮したNFC正規化後に切り詰め、再度文字数チェックして調整する。
+        TODO: より正確な文字数カウントのため twitter-text-parser ライブラリの使用を検討
+    """
+    comment_length = _safe_text_length(comment)
+    if comment_length <= max_length:
+        return comment
+
+    logger.warning(f"Comment too long ({comment_length} chars), truncating...")
+    normalized_comment = unicodedata.normalize("NFC", comment)
+    target_length = max_length - 3  # "..." を考慮
+    # 超過分を一気に引いてから微調整
+    truncated = normalized_comment[:target_length] + "..."
+    over = _safe_text_length(truncated) - max_length
+    if over > 0:
+        target_length = max(0, target_length - over)
+        truncated = normalized_comment[:target_length] + "..."
+    # 微調整ループ（target_lengthを減らせば_safe_text_length(truncated)も減るため、必ず終了する）
+    while _safe_text_length(truncated) > max_length and target_length > 0:
+        target_length -= 1
+        truncated = normalized_comment[:target_length] + "..."
+    return truncated
 
 
 # ログ設定
@@ -62,8 +98,12 @@ class TwitterClient:
     def _setup_client(self) -> None:
         """Twitter APIクライアントをセットアップ"""
         try:
-            # Twitter API v2 クライアント（ツイート投稿用）
+            # Twitter API v2 クライアント（投稿・タイムライン取得はOAuth 1.0aユーザーコンテキストを使用）
+            # 検索(search_recent_tweets)はOAuth 1.0aでは401になり、Bearerトークンによる
+            # App-only認証（呼び出し側でuser_auth=Falseを指定）でのみ許可されるため、
+            # bearer_tokenも併せて渡しておく（実機確認済み、2026-08-29）
             self.client = tweepy.Client(
+                bearer_token=TWITTER_BEARER_TOKEN,
                 consumer_key=TWITTER_API_KEY,
                 consumer_secret=TWITTER_API_SECRET,
                 access_token=TWITTER_ACCESS_TOKEN,
@@ -165,54 +205,61 @@ class TwitterClient:
             logger.error(f"❌ Failed to like tweet: {e}")
             return False
 
-    def quote_tweet(self, tweet_id: str, comment: str) -> Optional[str]:
-        """コメント付きリツイート（Quote Tweet）"""
-        if self.dry_run:
-            logger.info(f"🎭 [DRY RUN] Would quote tweet {tweet_id} with comment: {comment}")
-            return "mock_quote_tweet_id"
+    def pseudo_quote_tweet(self, tweet_id: str, author_username: Optional[str], comment: str) -> Optional[str]:
+        """
+        コメント＋対象ツイートURLを本文に含めて投稿する（疑似引用リツイート）
 
-        try:
-            if self.client is None:
-                logger.error("❌ Twitter client not initialized")
-                return None
+        X API v2の quote_tweet_id パラメータによる引用ポストは、2026-04-20付で
+        セルフサーブ全層（Free/Basic/Pro/Pay-Per-Use）から削除され、自分がメンション/
+        引用された投稿にしか使えなくなった（403 Forbidden、2026-08-29実機確認済み）。
+        代わりに、対象ツイートのURLを本文に含めて通常投稿すると、Xが自動でリンクカードを
+        展開し、見た目上ネイティブ引用ポストとほぼ同等の表示になる（同日、Web投稿・API投稿
+        の両方で実機確認済み）ため、この方式を用いる。
 
-            # 文字数チェック（280文字制限 - 引用分を考慮）
-            # Unicode安全な文字カウントを使用（結合文字・絵文字考慮）
-            # TODO: より正確な文字数カウントのため twitter-text-parser ライブラリの使用を検討
-            comment_length = _safe_text_length(comment)
-            if comment_length > MAX_QUOTE_COMMENT_LENGTH:  # 引用URLを考慮して短めに設定
-                logger.warning(f"Comment too long ({comment_length} chars), truncating...")
-                # 結合文字・絵文字を考慮した安全な切り詰め
-                # NFC正規化後に切り詰め、その後再度文字数チェックして調整
-                normalized_comment = unicodedata.normalize("NFC", comment)
-                target_length = MAX_QUOTE_COMMENT_LENGTH - 3  # "..." を考慮
-                # 切り詰め後の文字数を確認し、必要に応じてさらに短縮
-                # パフォーマンス改善: まず超過分を概算してから微調整
-                truncated = normalized_comment[:target_length] + "..."
-                # 超過分を一気に引いてから微調整
-                over = _safe_text_length(truncated) - MAX_QUOTE_COMMENT_LENGTH
-                if over > 0:
-                    target_length = max(0, target_length - over)
-                    truncated = normalized_comment[:target_length] + "..."
-                # 微調整ループ（target_lengthを減らせば_safe_text_length(truncated)も減るため、必ず終了する）
-                while _safe_text_length(truncated) > MAX_QUOTE_COMMENT_LENGTH and target_length > 0:
-                    target_length -= 1
-                    truncated = normalized_comment[:target_length] + "..."
-                comment = truncated
+        Args:
+            tweet_id: 引用対象のツイートID
+            author_username: 引用対象ツイートの投稿者スクリーンネーム（URL組み立てに必須）
+            comment: nikuneのコメント文言
 
-            # コメント付きリツイート実行
-            response = self.client.create_tweet(text=comment, quote_tweet_id=tweet_id)
-            quote_tweet_id = response.data["id"]
-
-            logger.info(f"✅ Quote tweet posted successfully! ID: {quote_tweet_id}")
-            logger.info(f"📝 Comment: {comment}")
-            logger.info(f"🔗 Original tweet ID: {tweet_id}")
-
-            return quote_tweet_id
-
-        except Exception as e:
-            logger.error(f"❌ Failed to quote tweet: {e}")
+        Returns:
+            投稿されたツイートのID（失敗時はNone）
+        """
+        if not author_username:
+            logger.error("❌ Cannot build pseudo quote tweet: author_username is missing")
             return None
+
+        comment = _truncate_comment(comment, MAX_QUOTE_COMMENT_LENGTH)
+        url = f"https://x.com/{author_username}/status/{tweet_id}"
+        text = f"{comment} {url}"
+
+        posted_id = self.post_tweet(text)
+        if posted_id:
+            logger.info(f"🔗 Pseudo quote of original tweet: {tweet_id}")
+        return posted_id
+
+    @staticmethod
+    def _wrap_tweets_with_author_username(tweets_response: Any) -> List[Any]:
+        """
+        expansions=author_id付きレスポンスから、author_username付きの軽量オブジェクトに
+        ラップして返す
+
+        Note:
+            tweepy.Tweetは__slots__を使用しており動的な属性追加ができないため、
+            SimpleNamespaceに詰め替える。
+        """
+        users = (tweets_response.includes or {}).get("users") or []
+        users_by_id = {user.id: user.username for user in users}
+        return [
+            SimpleNamespace(
+                id=tweet.id,
+                text=tweet.text,
+                author_id=tweet.author_id,
+                author_username=users_by_id.get(tweet.author_id),
+                created_at=getattr(tweet, "created_at", None),
+                public_metrics=getattr(tweet, "public_metrics", None),
+            )
+            for tweet in tweets_response.data
+        ]
 
     def get_home_timeline(self, max_results: int = 10) -> Optional[List[Any]]:
         """フォロー中ユーザーのタイムライン取得"""
@@ -225,20 +272,70 @@ class TwitterClient:
                 logger.error("❌ Twitter client not initialized")
                 return None
 
-            # タイムライン取得
+            # タイムライン取得（引用URL組み立て用にauthor_usernameも取得）
             tweets = self.client.get_home_timeline(
-                max_results=max_results, tweet_fields=["created_at", "author_id", "text", "public_metrics"]
+                max_results=max_results,
+                tweet_fields=["created_at", "author_id", "text", "public_metrics"],
+                expansions=["author_id"],
+                user_fields=["username"],
             )
 
             if tweets.data:
-                logger.info(f"✅ Retrieved {len(tweets.data)} tweets from timeline")
-                return tweets.data
+                wrapped = self._wrap_tweets_with_author_username(tweets)
+                logger.info(f"✅ Retrieved {len(wrapped)} tweets from timeline")
+                return wrapped
             else:
                 logger.info("📭 No tweets found in timeline")
                 return []
 
         except Exception as e:
             logger.error(f"❌ Failed to get home timeline: {e}")
+            return None
+
+    def search_recent_food_tweets(self, query: str, max_results: int = 10) -> Optional[List[Any]]:
+        """
+        キーワード検索で直近ツイートを取得する（フォロー関係に依存しない候補探索）
+
+        フォロー中タイムラインだけでは候補が少なすぎる場合の補完手段。
+        検索(search_recent_tweets)はOAuth 1.0aユーザーコンテキストでは401になり、
+        Bearerトークンによるapp-only認証（user_auth=False）でのみ許可される
+        （2026-08-29実機確認済み）。
+
+        Args:
+            query: X検索クエリ（例: "(肉 OR グルメ) -is:retweet lang:ja"）
+            max_results: 取得件数
+
+        Returns:
+            マッチしたツイートのリスト（失敗時はNone）
+        """
+        if self.dry_run:
+            logger.info(f"🎭 [DRY RUN] Would search recent tweets: {query}")
+            return None  # AutoQuoteRetweeterでモックデータを使用
+
+        try:
+            if self.client is None:
+                logger.error("❌ Twitter client not initialized")
+                return None
+
+            tweets = self.client.search_recent_tweets(
+                query=query,
+                max_results=max_results,
+                tweet_fields=["created_at", "author_id", "text", "public_metrics"],
+                expansions=["author_id"],
+                user_fields=["username"],
+                user_auth=False,
+            )
+
+            if tweets.data:
+                wrapped = self._wrap_tweets_with_author_username(tweets)
+                logger.info(f"✅ Retrieved {len(wrapped)} tweets from search")
+                return wrapped
+            else:
+                logger.info("📭 No tweets found in search")
+                return []
+
+        except Exception as e:
+            logger.error(f"❌ Failed to search recent tweets: {e}")
             return None
 
 
