@@ -28,8 +28,9 @@ nikune service runner
         Slack 通知のユーザー名・アイコン（任意）
     - LINE_CHANNEL_ACCESS_TOKEN:
         LINE Messaging API のチャネルアクセストークン（任意）
-    - LINE_TARGET_IDS:
-        通知を送る LINE の userId / groupId のカンマ区切りリスト（任意）
+    - LINE_NOTIFY_ENABLED:
+        LINE通知（broadcast）を有効にするか（true/false, 既定: false）。
+        運用開始直後はSlackのみ通知し、監視頻度が下がった段階で有効化する想定。
 """
 
 from __future__ import annotations
@@ -143,62 +144,56 @@ class SlackNotification(NotificationChannel):
 
 
 class LineNotification(NotificationChannel):
-    """LINE Messaging API を利用した通知チャネル。"""
+    """LINE Messaging API の broadcast を利用した通知チャネル（友だち全員に配信、userId管理不要）。"""
 
-    def __init__(self, channel_token: str, target_ids: Sequence[str]) -> None:
+    def __init__(self, channel_token: str) -> None:
         super().__init__("LINE")
         self.channel_token = channel_token
-        self.target_ids = list(target_ids)
 
     @classmethod
     def from_env(cls) -> Optional["LineNotification"]:
-        channel_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-        target_ids_raw = os.getenv("LINE_TARGET_IDS")
+        # 運用開始直後はSlackのみ通知する方針のため、既定では無効（LINE_NOTIFY_ENABLED=true で有効化）
+        if not _env_flag("LINE_NOTIFY_ENABLED", default=False):
+            return None
 
-        if not channel_token or not target_ids_raw:
+        channel_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+        if not channel_token:
             return None
 
         if requests_module is None:
             LOGGER.warning("requests が利用できないため LINE 通知は無効化されます。")
             return None
 
-        target_ids = [tid.strip() for tid in target_ids_raw.split(",") if tid.strip()]
-        if not target_ids:
-            return None
-
-        return cls(channel_token=channel_token, target_ids=target_ids)
+        return cls(channel_token=channel_token)
 
     def send(self, message: str) -> None:
-        headers = {
-            "Authorization": f"Bearer {self.channel_token}",
-            "Content-Type": "application/json",
-        }
-
         if requests_module is None:  # pragma: no cover
             LOGGER.warning("%s 通知を送信できません（requests 未インポート）", self.name)
             return
 
-        for target_id in self.target_ids:
-            payload = {
-                "to": target_id,
-                "messages": [
-                    {
-                        "type": "text",
-                        "text": message,
-                    }
-                ],
-            }
+        headers = {
+            "Authorization": f"Bearer {self.channel_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "messages": [
+                {
+                    "type": "text",
+                    "text": message,
+                }
+            ],
+        }
 
-            try:
-                response = requests_module.post(
-                    "https://api.line.me/v2/bot/message/push",
-                    json=payload,
-                    headers=headers,
-                    timeout=NOTIFICATION_TIMEOUT,
-                )
-                response.raise_for_status()
-            except Exception as exc:  # pragma: no cover - 通信環境依存
-                LOGGER.error("%s 通知の送信に失敗しました（target=%s）: %s", self.name, target_id, exc)
+        try:
+            response = requests_module.post(
+                "https://api.line.me/v2/bot/message/broadcast",
+                json=payload,
+                headers=headers,
+                timeout=NOTIFICATION_TIMEOUT,
+            )
+            response.raise_for_status()
+        except Exception as exc:  # pragma: no cover - 通信環境依存
+            LOGGER.error("%s 通知の送信に失敗しました: %s", self.name, exc)
 
 
 class NotificationManager:
