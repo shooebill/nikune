@@ -514,8 +514,8 @@ class ContentGenerator:
             return template
 
     def _get_random_emoji(self) -> str:
-        """ランダムな絵文字を取得"""
-        emojis = ["🐻", "🍖", "🥩", "🔥", "✨", "💕", "🌟", "😊", "🤗", "💖"]
+        """ランダムな絵文字を取得（ペルソナの絵文字ルール準拠: 🐻の署名用途と肉系絵文字のみ）"""
+        emojis = ["🐻", "🍖", "🥩"]
         return random.choice(emojis)
 
     def _get_weather_emoji(self) -> str:
