@@ -50,7 +50,7 @@ class NotificationManagerTests(TestCase):
             "SLACK_WEBHOOK_USERNAME": "nikune-bot",
             "SLACK_WEBHOOK_ICON_EMOJI": ":bear:",
             "LINE_CHANNEL_ACCESS_TOKEN": "token-123",
-            "LINE_TARGET_IDS": "U123, U456",
+            "LINE_NOTIFY_ENABLED": "true",
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
@@ -61,7 +61,7 @@ class NotificationManagerTests(TestCase):
 
                 manager.send("テスト通知")
 
-        self.assertEqual(len(dummy_requests.calls), 3)
+        self.assertEqual(len(dummy_requests.calls), 2)
 
         slack_call = dummy_requests.calls[0]
         self.assertEqual(slack_call["url"], env["SLACK_WEBHOOK_URL"])
@@ -76,22 +76,20 @@ class NotificationManagerTests(TestCase):
         self.assertEqual(slack_call["headers"], None)
         self.assertEqual(slack_call["timeout"], 5)
 
-        line_call_targets = [call["json"]["to"] for call in dummy_requests.calls[1:]]
-        self.assertEqual(line_call_targets, ["U123", "U456"])
-
-        for call in dummy_requests.calls[1:]:
-            self.assertEqual(
-                call["headers"],
-                {
-                    "Authorization": f"Bearer {env['LINE_CHANNEL_ACCESS_TOKEN']}",
-                    "Content-Type": "application/json",
-                },
-            )
-            self.assertEqual(
-                call["json"]["messages"][0],
-                {"type": "text", "text": "テスト通知"},
-            )
-            self.assertEqual(call["timeout"], 5)
+        line_call = dummy_requests.calls[1]
+        self.assertEqual(line_call["url"], "https://api.line.me/v2/bot/message/broadcast")
+        self.assertEqual(
+            line_call["headers"],
+            {
+                "Authorization": f"Bearer {env['LINE_CHANNEL_ACCESS_TOKEN']}",
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(
+            line_call["json"],
+            {"messages": [{"type": "text", "text": "テスト通知"}]},
+        )
+        self.assertEqual(line_call["timeout"], 5)
 
     def test_notification_manager_without_channels(self) -> None:
         dummy_requests = DummyRequests()
@@ -125,11 +123,11 @@ class NotificationManagerTests(TestCase):
         self.assertIsNone(call["headers"])
         self.assertEqual(call["timeout"], 5)
 
-    def test_notification_manager_line_only_trims_targets(self) -> None:
+    def test_notification_manager_line_only_broadcasts(self) -> None:
         dummy_requests = DummyRequests()
         env = {
             "LINE_CHANNEL_ACCESS_TOKEN": "token-xyz",
-            "LINE_TARGET_IDS": " U123 , ,U456,",
+            "LINE_NOTIFY_ENABLED": "true",
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
@@ -139,28 +137,38 @@ class NotificationManagerTests(TestCase):
                 self.assertEqual(len(manager.channels), 1)
                 manager.send("LINE通知のみ")
 
-        # Two valid target IDs should result in two calls
-        self.assertEqual(len(dummy_requests.calls), 2)
+        # broadcastは宛先指定なしの1回呼び出しになる
+        self.assertEqual(len(dummy_requests.calls), 1)
 
-        for call, target in zip(dummy_requests.calls, ["U123", "U456"]):
-            self.assertEqual(
-                call["headers"],
-                {
-                    "Authorization": f"Bearer {env['LINE_CHANNEL_ACCESS_TOKEN']}",
-                    "Content-Type": "application/json",
-                },
-            )
-            self.assertEqual(call["timeout"], 5)
-            self.assertEqual(call["json"]["to"], target)
-            self.assertEqual(
-                call["json"]["messages"][0],
-                {"type": "text", "text": "LINE通知のみ"},
-            )
+        call = dummy_requests.calls[0]
+        self.assertEqual(call["url"], "https://api.line.me/v2/bot/message/broadcast")
+        self.assertEqual(
+            call["headers"],
+            {
+                "Authorization": f"Bearer {env['LINE_CHANNEL_ACCESS_TOKEN']}",
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(call["timeout"], 5)
+        self.assertNotIn("to", call["json"])
+        self.assertEqual(
+            call["json"]["messages"][0],
+            {"type": "text", "text": "LINE通知のみ"},
+        )
 
-    def test_line_notification_requires_targets(self) -> None:
+    def test_line_notification_disabled_by_default(self) -> None:
         env = {
             "LINE_CHANNEL_ACCESS_TOKEN": "token-xyz",
-            "LINE_TARGET_IDS": "   , ,",
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            manager = runner.build_notification_manager()
+
+        self.assertEqual(len(manager.channels), 0)
+
+    def test_line_notification_requires_token_even_when_enabled(self) -> None:
+        env = {
+            "LINE_NOTIFY_ENABLED": "true",
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
