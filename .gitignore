@@ -28,6 +28,9 @@ data/tweet_templates.tsv
 data/tweet_templates.generated.tsv
 data/quote_comments.tsv
 
+# NGワードリスト（本番運用の実データ、非公開）
+ng_keywords.txt
+
 # Redis dump file
 dump.rdb
 data/exported_templates.tsv
