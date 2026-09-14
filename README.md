@@ -10,7 +10,7 @@
 
 - **性格**: お肉に偏愛を持つキャラクター。丁寧語を使わず、断定的な口調が特徴
 - **機能**: 定期ツイート投稿、フォロー中ユーザーの食関連ツイートへの自動引用リツイート、重複防止、動的コンテンツ生成
-- **開発状況**: 2026-08-31にgo/no-go判断予定。**現在は本番デプロイ前のドライラン運用のみ**
+- **開発状況**: リリース予定は2026年9月中旬〜下旬。**現在は本番デプロイ前のドライラン運用のみ**
 
 キャラクターの人格・口調のサンプルは [`docs/CHARACTER_PERSONA_SAMPLE.md`](docs/CHARACTER_PERSONA_SAMPLE.md) を参照。このコードベースは特定のペルソナに固定されているわけではなく、任意のペルソナ定義に差し替えて動かせる設計を想定している。
 
@@ -83,7 +83,7 @@ NG_KEYWORDS=
 # 通知（任意、自動起動時のみ使用）
 # SLACK_WEBHOOK_URL=
 # LINE_CHANNEL_ACCESS_TOKEN=
-# LINE_TARGET_IDS=
+# LINE_NOTIFY_ENABLED=false
 ```
 
 ### 4. 🗄️ データベースの初期化
@@ -179,6 +179,7 @@ nikune/
 ├── ✅ check_code.sh                   # 品質チェック一括実行（black/isort/flake8/mypy/pytest）
 ├── 🎯 .gitattributes                  # Git属性（LF統一）
 ├── 🚫 .gitignore
+├── 📄 THIRD_PARTY_LICENSES.md         # NGワード辞書として利用するOSSのライセンス表記
 └── 🐍 .python-version
 ```
 
@@ -214,6 +215,26 @@ uv run pytest tests/
 2. `uv run python main.py --setup-db` でデータベースを更新
 3. カテゴリ・トーンのマスタ拡張は `data/category.tsv` / `data/tone.tsv` を編集
 
+### 🚫 NGワードの選定基準・変更手順
+
+- 対象: 引用リツイート候補ツイート本文のフィルタリング（定期投稿には使われない。詳細は
+  `nikune/content_generator.py` の `get_food_keyword_score()` を参照）
+- 選定基準の目安:
+  - 性的表現・差別語・暴言など、単語自体が不適切と断定できるもの
+  - 事件・事故・暴力関連のセンシティブな話題
+  - スパム・出会い系・詐欺の定番ワード
+  - 政治・宗教的に対立を招きやすい話題（ヴィーガン/肉食論争など）
+  - 自傷・自殺関連のセンシティブなワード
+  - 「部落」「屠殺」等、日常語・歴史語と重なり食・レストラン関連ツイートを誤って弾く
+    リスクが高い語は慎重に検討し、安易に追加しない
+- 変更手順:
+  1. `ng_keywords.txt`（プロジェクトルート、`.gitignore`対象の実データ）を直接編集する。
+     1行1ワード、`#`で始まる行はコメント
+  2. 公開されているOSSのNGワード辞書を取り込む場合はライセンス条件を確認し、
+     [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) に出典・ライセンス表記を追記する
+  3. `uv run python main.py --quote-check --dry-run` で実際の候補ツイートに対して
+     誤検出がないか確認しながら調整する
+
 ## 🔧 トラブルシューティング
 
 #### Redis接続エラー
@@ -229,6 +250,7 @@ sudo systemctl start redis-server # Linux
 
 #### NGワード未設定の警告
 - `⚠️ NGワードリストが見つかりませんでした` はドライラン時は無害だが、**本番投稿を開始する前に`NG_KEYWORDS`または`ng_keywords.txt`を必ず設定する**
+- `ng_keywords.txt`は`.gitignore`対象（実データのため非公開）。公開されているOSSのNGワード辞書を参考にする場合は[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)のライセンス表記を確認すること
 
 #### 依存関係エラー
 ```bash
@@ -270,9 +292,11 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
 ### 2. LINE 通知の準備（任意）
 - LINE Developers で Messaging API を構築し、チャネルアクセストークンを取得
 - `.env` などに `LINE_CHANNEL_ACCESS_TOKEN` を保存
-- 送信先となる `userId` や `groupId` を取得し、カンマ区切りで `LINE_TARGET_IDS` に設定
-  例: `LINE_TARGET_IDS=Uxxxxxxxxx,Uyyyyyyyyy`
-- どちらも未設定なら LINE 通知は送信されません
+- 友だち登録した全員に配信する broadcast 方式のため、`userId` や `groupId` の個別登録は不要
+- `LINE_NOTIFY_ENABLED=true` を設定して初めて有効化される（既定は `false`）。運用開始直後は
+  Slackのみで通知し、監視頻度が下がった段階でLINE通知も有効化する運用を想定
+- `LINE_CHANNEL_ACCESS_TOKEN` 未設定、または `LINE_NOTIFY_ENABLED` が `false`（既定）の場合は
+  LINE 通知は送信されません
 
 ### 3. サービスラッパーの利用
 - `uv run python scripts/nikune_service_runner.py` でスケジューラーが常駐起動します
