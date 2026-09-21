@@ -131,6 +131,11 @@ class ContentGenerator:
     # 引用コメント文言のエクスポート先（非公開スプレッドシート由来、gitignore対象）
     QUOTE_COMMENTS_FILE = "data/quote_comments.tsv"
 
+    # 通常投稿の絵文字ルール（docs/CHARACTER_PERSONA_SAMPLE.md「絵文字の使用ルール」）
+    # 署名: 🐻 を文頭に1つ置く。装飾目的の絵文字は使わない（検出時は警告ログのみで自動削除はしない）
+    SIGNATURE_EMOJI = "🐻"
+    PROHIBITED_DECORATIVE_EMOJIS = ("✨", "😍", "🤤", "😋", "🔥", "💕", "🌟", "😊", "🤗", "💖")
+
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
         コンテンツジェネレーターを初期化
@@ -451,6 +456,9 @@ class ContentGenerator:
             # 動的要素を追加
             processed_content = self._add_dynamic_elements(base_template)
 
+            # 絵文字ルール: 署名🐻を文頭に保証し、装飾絵文字の混入は警告する
+            processed_content = self._apply_signature(processed_content)
+
             # 文字数チェック（280文字以下に短縮）
             # 注意: textwrap.shorten()は単語境界で切り詰めるため、日本語（スペースなし）では
             # 期待通りに動作しない可能性がある。そのため、直接文字列を切り詰める方式を採用。
@@ -467,6 +475,28 @@ class ContentGenerator:
         except Exception as e:
             logger.error(f"❌ Failed to process template: {e}")
             return None
+
+    def _apply_signature(self, content: str) -> str:
+        """
+        通常投稿に絵文字ルールを適用する
+
+        文頭が🐻でなければ署名として付与する（テンプレート側の書き忘れを防ぐ）。
+        禁止の装飾絵文字が含まれていた場合は警告ログを出す。自動削除はしない
+        （テンプレート＝スプレッドシート側の誤りに気づけるようにするため）。
+
+        Args:
+            content: プレースホルダー置換後のツイート内容
+
+        Returns:
+            署名が文頭にあるツイート内容
+        """
+        found = [emoji for emoji in self.PROHIBITED_DECORATIVE_EMOJIS if emoji in content]
+        if found:
+            logger.warning(f"⚠️ 装飾絵文字を含むテンプレートです（ペルソナ違反）: {''.join(found)}")
+
+        if content.startswith(self.SIGNATURE_EMOJI):
+            return content
+        return f"{self.SIGNATURE_EMOJI} {content}"
 
     def _add_dynamic_elements(self, template: str) -> str:
         """
