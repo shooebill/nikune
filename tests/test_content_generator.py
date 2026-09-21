@@ -148,3 +148,40 @@ class QuoteCommentPersonaComplianceTests(TestCase):
         self.assertFalse(self.generator._high_priority_comments == [])
         self.assertFalse(self.generator._medium_priority_comments == [])
         self.assertFalse(self.generator._default_quote_comments == [])
+
+
+class TweetSignatureEnforcementTests(TestCase):
+    """通常投稿の絵文字ルール（署名🐻の文頭保証・装飾絵文字の警告）"""
+
+    def setUp(self) -> None:
+        self.generator = _make_generator()
+
+    def test_signature_is_prepended_when_missing(self) -> None:
+        self.assertEqual(self.generator._apply_signature("テスト"), "🐻 テスト")
+
+    def test_signature_is_not_duplicated_when_present(self) -> None:
+        self.assertEqual(self.generator._apply_signature("🐻 テスト"), "🐻 テスト")
+
+    def test_signature_is_prepended_before_other_leading_emoji(self) -> None:
+        self.assertEqual(self.generator._apply_signature("🥩 テスト"), "🐻 🥩 テスト")
+
+    def test_decorative_emoji_logs_warning_but_is_not_removed(self) -> None:
+        with self.assertLogs("nikune.content_generator", level="WARNING") as captured:
+            result = self.generator._apply_signature("🐻 テスト ✨")
+        self.assertEqual(result, "🐻 テスト ✨")
+        self.assertTrue(any("装飾絵文字" in message for message in captured.output))
+
+    def test_clean_template_logs_no_warning(self) -> None:
+        with self.assertNoLogs("nikune.content_generator", level="WARNING"):
+            self.generator._apply_signature("🐻 テスト 🥩")
+
+    def test_process_template_applies_signature(self) -> None:
+        processed = self.generator._process_template({"id": "1", "template": "テスト"})
+        self.assertEqual(processed, "🐻 テスト")
+
+    def test_prohibited_list_covers_persona_forbidden_emoji(self) -> None:
+        # テスト側の禁止リストのうち、コード側に無いものが増えていないこと（👑はペルソナ文書外のため除外）
+        missing = [
+            e for e in FORBIDDEN_DECORATIVE_EMOJI if e != "👑" and e not in self.generator.PROHIBITED_DECORATIVE_EMOJIS
+        ]
+        self.assertEqual(missing, [])
