@@ -215,12 +215,15 @@ def post_now_command(
         return False
 
 
-def start_scheduler_command(config_file: Optional[str] = None) -> bool:
+def start_scheduler_command(config_file: Optional[str] = None, dry_run: bool = False) -> bool:
     """スケジューラーを開始"""
-    print(f"🐻 {BOT_NAME} - Starting scheduler...")
+    if dry_run:
+        print(f"🐻 {BOT_NAME} - Starting scheduler (DRY RUN mode)...")
+    else:
+        print(f"🐻 {BOT_NAME} - Starting scheduler...")
 
     try:
-        with SchedulerManager() as scheduler:
+        with SchedulerManager(dry_run=dry_run) as scheduler:
             # サンプルデータがない場合はセットアップ
             if not setup_sample_data(scheduler.db_manager):
                 print("❌ Failed to setup sample data")
@@ -434,6 +437,7 @@ def main() -> None:
   python main.py --quote-check              # 食関連ツイート（お肉＋食・レストラン）をチェック・Quote Retweet
   python main.py --quote-check --dry-run    # Quote Retweetのドライラン
   python main.py --schedule                # スケジューラー開始
+  python main.py --schedule --dry-run      # スケジューラーのドライラン（投稿・引用RTとも実行せずリハーサル）
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
   python main.py --setup-db --file data/custom.tsv # 指定ファイルからインポート
         """,
@@ -459,7 +463,7 @@ def main() -> None:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="実際の投稿は行わず、内容のみ表示（--post-now用）",
+        help="実際の投稿は行わず、内容のみ表示（--post-now / --quote-check / --schedule用）",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログを出力")
 
@@ -489,7 +493,7 @@ def main() -> None:
         elif args.quote_check:
             success = check_quote_retweet_command(dry_run=args.dry_run)
         elif args.schedule:
-            success = start_scheduler_command(config_file=args.config)
+            success = start_scheduler_command(config_file=args.config, dry_run=args.dry_run)
         elif args.setup_db:
             success = import_templates_command(file_path=args.file)
 
