@@ -62,7 +62,8 @@ uv run pytest tests/test_content_generator.py -v
 - **パッケージ管理**: `uv`（pip/venvの代替）。Python 3.13.x
 - **仮想環境**: uvが自動作成・管理（手動activate不要）
 - **Twitter API資格情報**: `.env`（プロジェクトルート、gitignore対象）
-- **主要依存**: tweepy, schedule, requests, python-dotenv, redis
+- **主要依存**: tweepy, schedule, requests, python-dotenv, redis。これらは実行時依存として`pyproject.toml`の`[project.dependencies]`に、black/isort/flake8/mypy等の開発ツールは`[dependency-groups].dev`に、すべて明示的にバージョン固定で宣言済み。**`uv sync`だけで**（`.venv`を新規作成した状態からでも）実行・品質チェックに必要な全パッケージが揃う。手動での`uv pip install`や個別のバージョン合わせは不要
+- `requirements.txt`は廃止済み（旧・手動`pip install`用のフリーズ出力で、`pyproject.toml`/`uv.lock`と情報源が重複し乖離の原因になっていたため削除）。本番サーバー（wren）等へのデプロイでpip形式の一覧が必要な場合は、都度`uv export --no-dev --format requirements-txt`等で生成すること（常設ファイルとしては持たない）
 - **データベース**: SQLite（永続化）＋ Redis（キャッシュ・重複防止）。Redisは`brew services start redis`等で事前起動が必要
 - **開発ツール設定**: `pyproject.toml`（black line-length=120, isort, mypy）／`.flake8`（max-line-length=120）。どちらもリポジトリにコミット済みの共有設定
 - **NGワード**: `NG_KEYWORDS`環境変数または`ng_keywords.txt`で設定。**2026-08-20時点で未設定**（本番未デプロイのドライラン運用のため実害なし）。本番投稿を開始する前に必ず設定すること
