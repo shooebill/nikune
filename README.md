@@ -10,13 +10,13 @@
 
 - **性格**: お肉に偏愛を持つキャラクター。丁寧語を使わず、断定的な口調が特徴
 - **機能**: 定期ツイート投稿、フォロー中ユーザーの食関連ツイートへの自動引用リツイート、重複防止、動的コンテンツ生成
-- **開発状況**: リリース予定は2026年9月中旬〜下旬。**現在は本番デプロイ前のドライラン運用のみ**
+- **開発状況**: 本番運用中。デプロイ時期・既知の未対応事項など詳細な開発状況は[`AGENT.md`](AGENT.md)の「Development Status」を参照
 
 キャラクターの人格・口調のサンプルは [`docs/CHARACTER_PERSONA_SAMPLE.md`](docs/CHARACTER_PERSONA_SAMPLE.md) を参照。このコードベースは特定のペルソナに固定されているわけではなく、任意のペルソナ定義に差し替えて動かせる設計を想定している。
 
 ### 🚀 主な機能
 
-- ✅ **定期ツイート投稿**: スケジューラーによる自動投稿（デフォルト 09:00 / 13:30 / 19:00）
+- ✅ **定期ツイート投稿**: スケジューラーによる自動投稿（`--schedule`モード使用時のコードデフォルトは 09:00 / 13:30 / 19:00。実際の投稿時刻はデプロイ方式・運用設定により異なる。詳細は下記「使用方法」および[`AGENT.md`](AGENT.md)を参照）
 - ✅ **自動引用リツイート**: フォロー中ユーザーの食関連ツイート（お肉＋食・レストラン全般）を検出し、優先度に応じてコメント付きで引用リツイート
 - ✅ **重複防止**: Redisキャッシュ＋処理済みID追跡によるテンプレート・ツイートの重複回避
 - ✅ **動的コンテンツ**: 時間・挨拶の自動挿入
@@ -125,7 +125,10 @@ uv run python main.py --post-now --dry-run
 uv run python main.py --quote-check
 uv run python main.py --quote-check --dry-run
 
-# ⏰ スケジューラーを開始（デフォルト：09:00, 13:30, 19:00 投稿、10:30/15:00/21:00 引用チェック）
+# ⏰ スケジューラーを開始（`--schedule`モードのコードデフォルト：09:00/13:30/19:00 投稿、10:30/15:00/21:00 引用チェック）
+# 注意: これはコード（--scheduleモード使用時）のデフォルト値。実際のデプロイでは`--schedule`常駐ではなく
+# cron等から`--post-now`/`--quote-check`を直接呼ぶ運用も可能で、その場合の時刻は運用パラメータとして
+# 別途設定される（本番の具体的な運用方法・時刻は[`AGENT.md`](AGENT.md)を参照）
 uv run python main.py --schedule
 
 # 📥 テンプレートインポート
@@ -147,7 +150,7 @@ uv run python main.py --setup-db --file data/your_templates.tsv
 - `data/templates.db` — SQLiteデータベース
 - `data/tweet_templates.tsv` — 手入力テンプレート
 - `data/tweet_templates.generated.tsv` — AI生成テンプレート（ドラフト）
-- `data/exported_templates.tsv` — エクスポートされたテンプレート
+- `data/exported_templates.tsv` — `export_templates_to_tsv()`（`nikune/database.py`）使用時にのみ生成される任意のエクスポート先。通常の運用フローでは生成されない
 
 以下は上記スプレッドシート由来ではなく、`bucket`/`keyword`/`text`形式で管理する想定の別ファイル。対応データはスプレッドシート側にまだ作成されていないため、通常はファイルが存在せず最小限のフォールバックで動作する：
 
@@ -173,9 +176,15 @@ nikune/
 ├── 📁 docs/
 │   └── CHARACTER_PERSONA_SAMPLE.md   # キャラクターペルソナのサンプル
 ├── 📁 tests/
-│   ├── test_content_generator.py
 │   ├── test_auto_quote_retweeter.py
-│   └── test_nikune_service_runner.py
+│   ├── test_content_generator.py
+│   ├── test_database.py
+│   ├── test_health_check.py
+│   ├── test_logging_config.py
+│   ├── test_main.py
+│   ├── test_nikune_service_runner.py
+│   ├── test_scheduler.py
+│   └── test_twitter_client.py
 ├── 📁 data/                          # マスタ・サンプル（実データはgitignore対象）
 ├── ⚙️ pyproject.toml                  # 依存関係・Black/isort/mypy/pytest設定
 ├── 🔧 .flake8                        # コード品質設定
