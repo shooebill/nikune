@@ -116,9 +116,10 @@ class ContentGenerator:
     NG_KEYWORDS = NG_KEYWORDS
 
     # --- 引用コメント文言について ---
-    # 実際の文言は非公開スプレッドシート（tweet_templateのpersonaタブ等）で起草・管理し、
-    # data/quote_comments.tsv（gitignore対象）としてエクスポートしたものを実行時に読み込む。
-    # ここに書かれているのはファイル未配置時の最小限フォールバックのみで、公開済みの
+    # data/quote_comments.tsv（gitignore対象）はbucket/keyword/text形式で引用RTのコメント文言を
+    # 管理する想定のファイルだが、対応するデータは非公開スプレッドシート（tweet_template）側に
+    # まだ作成されていない（該当タブ自体が存在しない）。そのため実行時は常にこのファイルが
+    # 見つからず、ここに書かれている最小限フォールバックのみが使われる。公開済みの
     # docs/CHARACTER_PERSONA_SAMPLE.md 記載の口癖（肉ね！等）の範囲に留めている。
     # 詳細は _load_quote_comments() を参照。
     _FALLBACK_SPECIFIC_KEYWORD_COMMENTS: List[tuple[str, List[str]]] = [
@@ -144,7 +145,9 @@ class ContentGenerator:
     # 単語境界パターン: 英数字または日本語文字以外
     WORD_BOUNDARY_PATTERN = rf"[^\w{JAPANESE_CHARS}]"
 
-    # 引用コメント文言のエクスポート先（非公開スプレッドシート由来、gitignore対象）
+    # 引用コメント文言ファイル（gitignore対象）。想定データ源は非公開スプレッドシートだが、
+    # 2026年9月時点では対応するデータがシート側に未作成のため、通常はこのファイルは存在せず
+    # フォールバック文言が使われる（詳細は _load_quote_comments() を参照）
     QUOTE_COMMENTS_FILE = "data/quote_comments.tsv"
 
     # 通常投稿の絵文字ルール（docs/CHARACTER_PERSONA_SAMPLE.md「絵文字の使用ルール」）
@@ -198,7 +201,7 @@ class ContentGenerator:
             self._food_patterns = {}
             logger.warning("⚠️ Using fallback string matching for food keywords")
 
-        # 引用コメント文言を読み込み（非公開スプレッドシート由来のファイル、未配置時はフォールバック）
+        # 引用コメント文言を読み込み（対応データが非公開スプレッドシート側に未作成のため、通常はフォールバック）
         (
             self._specific_keyword_comments,
             self._high_priority_comments,
@@ -332,8 +335,10 @@ class ContentGenerator:
         """
         引用コメント文言を読み込む
 
-        data/quote_comments.tsv（非公開スプレッドシート由来、gitignore対象）が存在すればそこから
-        読み込み、存在しなければ最小限のフォールバック（クラス定数）を使用する。
+        data/quote_comments.tsv（gitignore対象）が存在すればそこから読み込み、存在しなければ
+        最小限のフォールバック（クラス定数）を使用する。想定データ源は非公開スプレッドシートだが、
+        2026年9月時点では対応するデータがシート側に未作成のため、通常はファイルが存在せず
+        フォールバックで動作する。
 
         ファイル形式（タブ区切り、ヘッダー行あり）: bucket, keyword, text
             - bucket: "specific" | "high" | "medium" | "default"
@@ -347,7 +352,8 @@ class ContentGenerator:
         if not Path(self.QUOTE_COMMENTS_FILE).exists():
             logger.warning(
                 f"⚠️ 引用コメントファイルが見つかりませんでした: {self.QUOTE_COMMENTS_FILE}。"
-                "最小限のフォールバック文言を使用します。非公開スプレッドシートからエクスポートしてください。"
+                "最小限のフォールバック文言を使用します。"
+                "（対応データが非公開スプレッドシート側に未作成のため、現状は常にこの状態です）"
             )
             return (
                 list(self._FALLBACK_SPECIFIC_KEYWORD_COMMENTS),
