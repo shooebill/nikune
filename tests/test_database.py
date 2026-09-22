@@ -1,6 +1,18 @@
+"""
+DatabaseManager（SQLite + Redis）に関する回帰テスト
+
+含まれるバグ回帰テスト:
+    1. clear_all_templates()がRedisのflushdb()（インスタンス全体の消去）を
+       使っており、nikune以外のアプリが同じRedisインスタンスを共有している場合に
+       他データまで全消去してしまっていた（本番データ安全性の不具合）。
+    2. record_tweet_usage()のttl_hours引数が、can_use_template()が実際の
+       クールダウン判定に使うrecent_tweet:{template_id}キーには反映されず、
+       86400秒（24時間）に決め打ちされていた。
+"""
+
 import sqlite3
 from typing import Any, Iterable, List, Optional, Set, cast
-from unittest import TestCase
+from unittest import TestCase, mock
 
 from nikune.database import DatabaseManager
 
@@ -77,3 +89,44 @@ class ClearAllTemplatesRedisSafetyTests(TestCase):
 
         self.assertFalse(fake_redis.flushdb_called)
         self.assertEqual(fake_redis.store, {"other-app:foo"})
+
+
+def _make_db_manager_with_mock_redis() -> "tuple[DatabaseManager, mock.MagicMock]":
+    db_manager = object.__new__(DatabaseManager)  # __init__をスキップ（実DB接続不要）
+    mock_redis = mock.MagicMock()
+    db_manager.redis_client = mock_redis
+    return db_manager, mock_redis
+
+
+class RecordTweetUsageTtlTests(TestCase):
+    def _get_recent_key_ttl(self, mock_redis: mock.MagicMock, template_id: int) -> int:
+        recent_key = f"recent_tweet:{template_id}"
+        matching_calls = [call for call in mock_redis.setex.call_args_list if call.args[0] == recent_key]
+        self.assertEqual(len(matching_calls), 1, msg=f"{recent_key}へのsetex呼び出しが1回であること")
+        return int(matching_calls[0].args[1])
+
+    def test_recent_tweet_key_ttl_uses_custom_ttl_hours(self) -> None:
+        db_manager, mock_redis = _make_db_manager_with_mock_redis()
+
+        db_manager.record_tweet_usage(1, "テスト", ttl_hours=2)
+
+        self.assertEqual(self._get_recent_key_ttl(mock_redis, 1), 2 * 3600)
+
+    def test_recent_tweet_key_ttl_defaults_to_24_hours(self) -> None:
+        db_manager, mock_redis = _make_db_manager_with_mock_redis()
+
+        db_manager.record_tweet_usage(1, "テスト")
+
+        self.assertEqual(self._get_recent_key_ttl(mock_redis, 1), 24 * 3600)
+
+    def test_tweet_history_key_ttl_still_uses_ttl_hours(self) -> None:
+        # 監査ログ用キー側は元々ttl_hoursが反映されていたため、回帰していないことも確認する
+        db_manager, mock_redis = _make_db_manager_with_mock_redis()
+
+        db_manager.record_tweet_usage(1, "テスト", ttl_hours=2)
+
+        history_calls = [
+            call for call in mock_redis.setex.call_args_list if str(call.args[0]).startswith("tweet_history:1:")
+        ]
+        self.assertEqual(len(history_calls), 1)
+        self.assertEqual(history_calls[0].args[1], 2 * 3600)

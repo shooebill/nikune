@@ -124,10 +124,10 @@ def test_all_components(dry_run: bool = False) -> bool:
         # コンテンツ生成テスト
         print("\n4. Testing Content Generation...")
         with ContentGenerator() as generator:
-            content = generator.generate_tweet_content()
-            if content:
+            generated = generator.generate_tweet_content()
+            if generated:
                 print("✅ Content Generation: OK")
-                print(f"📝 Sample: {content}")
+                print(f"📝 Sample: {generated.text}")
             else:
                 print("❌ Content Generation: Failed")
                 return False
@@ -184,10 +184,11 @@ def post_now_command(
                     return False
 
                 if dry_run:
-                    # ドライランモード: コンテンツ生成のみ
-                    content = scheduler.content_generator.generate_tweet_content(category, tone)
-                    if content:
-                        print(f"🔍 [DRY RUN] Would post: {content}")
+                    # ドライランモード: コンテンツ生成のみ（実際には投稿しないため、
+                    # テンプレートのクールダウンも消費しない）
+                    generated = scheduler.content_generator.generate_tweet_content(category, tone)
+                    if generated:
+                        print(f"🔍 [DRY RUN] Would post: {generated.text}")
                         return True
                     else:
                         print("❌ [DRY RUN] Failed to generate content")

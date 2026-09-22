@@ -4,6 +4,7 @@ Twitter APIとの接続、ツイート投稿などを担当
 """
 
 import logging
+import re
 import unicodedata
 from types import SimpleNamespace
 from typing import Any, List, Optional
@@ -75,6 +76,51 @@ def _truncate_comment(comment: str, max_length: int) -> str:
         target_length -= 1
         truncated = normalized_comment[:target_length] + "..."
     return truncated
+
+
+# 本文末尾のURL（疑似引用リツイートの "コメント + 半角スペース + URL" 構造を想定）を検出するパターン
+_TRAILING_URL_PATTERN = re.compile(r"(https?://\S+)$")
+
+
+def _truncate_text_preserving_trailing_url(text: str, max_length: int) -> str:
+    """
+    文字数超過時に、末尾のURLを壊さずに本文（コメント部分）側を切り詰める
+
+    pseudo_quote_tweet()のコメント文字数バジェット（MAX_QUOTE_COMMENT_LENGTH）は
+    Twitterのt.co短縮後のURL長（約23文字）を前提にしているが、post_tweet()側の
+    文字数チェックは短縮前の生のURL（x.com/{username}/status/{tweet_id}、
+    40〜60文字程度）を含めた全体の長さで行われる。そのため「コメント＋URL」の
+    合計が280文字を超えるケースがあり、単純に末尾を切り詰めるとURL自体が
+    途中で切れて壊れたリンクになってしまう。これを防ぐため、末尾にURLがある
+    場合はURLを保護し、それより前の本文側だけを切り詰める。
+
+    Args:
+        text: 切り詰め対象のテキスト
+        max_length: 最大文字数
+
+    Returns:
+        URLを保護しつつ切り詰めたテキスト（末尾にURLが無い場合は従来通り単純に切り詰める）
+    """
+    match = _TRAILING_URL_PATTERN.search(text)
+    if not match:
+        # URLを含まない場合は本文全体をUnicode安全に切り詰める
+        return _truncate_comment(text, max_length)
+
+    url = match.group(1)
+    prefix = text[: match.start()].rstrip()
+
+    url_length = _safe_text_length(url)
+    if url_length >= max_length:
+        # URL単体で上限を超える異常系。これ以上安全に切り詰められないため、
+        # 警告のみでそのまま返す（Twitter API側でエラーになる可能性がある）
+        logger.error(f"URL alone exceeds max tweet length ({url_length} > {max_length}); returning text as-is")
+        return text
+
+    # URLとの区切りスペース1文字分を確保した上で、本文側に使える文字数を計算
+    available_for_prefix = max_length - url_length - 1
+    truncated_prefix = _truncate_comment(prefix, available_for_prefix)
+
+    return f"{truncated_prefix} {url}"
 
 
 # ログ設定
@@ -160,10 +206,13 @@ class TwitterClient:
                 logger.error("❌ Twitter client not initialized")
                 return None
 
-            # 文字数チェック（280文字制限）
-            if len(text) > 280:
-                logger.warning(f"Tweet too long ({len(text)} chars), truncating...")
-                text = text[:277] + "..."
+            # 文字数チェック（280文字制限、Unicode安全カウントを使用）
+            # 末尾にURLを含む場合（疑似引用リツイート等）はURLを壊さないよう保護しつつ
+            # 本文側だけを切り詰める（_truncate_text_preserving_trailing_url参照）
+            text_length = _safe_text_length(text)
+            if text_length > 280:
+                logger.warning(f"Tweet too long ({text_length} chars), truncating...")
+                text = _truncate_text_preserving_trailing_url(text, 280)
 
             # ツイート投稿
             response = self.client.create_tweet(text=text)

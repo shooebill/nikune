@@ -229,9 +229,11 @@ class DatabaseManager:
             usage_key = f"template_usage:{template_id}"
             self.redis_client.incr(usage_key)
 
-            # 重複防止用の短期フラグ
+            # 重複防止用の短期フラグ（クールダウン判定に使うTTLはttl_hours引数に従う。
+            # 以前は86400秒（24時間）に決め打ちされており、can_use_template()が実際に
+            # 参照するこのキーにttl_hoursが反映されていなかった）
             recent_key = f"recent_tweet:{template_id}"
-            self.redis_client.setex(recent_key, 86400, "used")  # 24時間
+            self.redis_client.setex(recent_key, ttl_hours * 3600, "used")
 
             logger.info(f"📝 Tweet usage recorded: Template ID={template_id}")
 

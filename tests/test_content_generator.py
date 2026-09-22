@@ -1,7 +1,7 @@
 import re
 from unittest import TestCase, mock
 
-from nikune.content_generator import ContentGenerator
+from nikune.content_generator import ContentGenerator, GeneratedTweetContent
 
 # 絵文字ルール（docs/CHARACTER_PERSONA_SAMPLE.md）で禁止されている装飾絵文字
 FORBIDDEN_DECORATIVE_EMOJI = ["✨", "😍", "🤤", "😋", "🔥", "💕", "🌟", "😊", "🤗", "💖", "👑"]
@@ -82,6 +82,23 @@ class FoodKeywordDetectionTests(TestCase):
         self.assertTrue(self.generator.is_food_related_tweet("ステーキ食べた"))
         self.assertTrue(self.generator.is_food_related_tweet("カレー食べた"))
         self.assertFalse(self.generator.is_food_related_tweet("今日は晴れ"))
+
+    def test_lowercase_bbq_is_still_recognized_as_meat_topic(self) -> None:
+        # バグ回帰テスト: 食キーワードのマッチはre.IGNORECASEで行われるため、
+        # マッチした元テキストの大文字小文字のままの部分文字列（例: "bbq"）が
+        # MEAT_KEYWORDS側の表記（"BBQ"）とcase-sensitiveに比較されると、
+        # 小文字表記のツイートがis_meat_topic=Falseになってしまっていた。
+        result = self.generator.get_food_keyword_score("bbq最高だった")
+
+        self.assertTrue(result["is_food_related"])
+        self.assertIn("bbq", result["matched_keywords"])
+        self.assertTrue(result["is_meat_topic"])
+
+    def test_uppercase_bbq_is_recognized_as_meat_topic(self) -> None:
+        result = self.generator.get_food_keyword_score("BBQ最高だった")
+
+        self.assertTrue(result["is_food_related"])
+        self.assertTrue(result["is_meat_topic"])
 
 
 class QuoteCommentPersonaComplianceTests(TestCase):
@@ -185,3 +202,42 @@ class TweetSignatureEnforcementTests(TestCase):
             e for e in FORBIDDEN_DECORATIVE_EMOJI if e != "👑" and e not in self.generator.PROHIBITED_DECORATIVE_EMOJIS
         ]
         self.assertEqual(missing, [])
+
+
+class TweetContentGenerationCooldownTests(TestCase):
+    """
+    バグ回帰テスト: generate_tweet_content()は投稿成功前にテンプレートのクールダウンを
+    消費してはいけない（Redisへの書き込みは呼び出し元がrecord_tweet_usage()で行う）
+    """
+
+    def setUp(self) -> None:
+        self.db_manager = mock.MagicMock()
+        self.db_manager.get_available_template.return_value = {"id": "1", "template": "テスト"}
+        self.generator = ContentGenerator(db_manager=self.db_manager)
+
+    def test_generate_tweet_content_has_no_side_effect(self) -> None:
+        generated = self.generator.generate_tweet_content()
+
+        self.assertIsInstance(generated, GeneratedTweetContent)
+        assert generated is not None
+        self.assertEqual(generated.template_id, 1)
+        self.assertEqual(generated.text, "🐻 テスト")
+        # 生成しただけではRedisへの使用履歴記録（クールダウン消費）が起きないこと
+        self.db_manager.record_tweet_usage.assert_not_called()
+
+    def test_record_tweet_usage_forwards_to_db_manager(self) -> None:
+        generated = self.generator.generate_tweet_content()
+        assert generated is not None
+
+        # 投稿成功を模した後、明示的にrecord_tweet_usage()を呼んだ場合のみ記録される
+        self.generator.record_tweet_usage(generated.template_id, generated.text)
+
+        self.db_manager.record_tweet_usage.assert_called_once_with(generated.template_id, generated.text)
+
+    def test_generate_tweet_content_returns_none_when_no_template_available(self) -> None:
+        self.db_manager.get_available_template.return_value = None
+
+        generated = self.generator.generate_tweet_content()
+
+        self.assertIsNone(generated)
+        self.db_manager.record_tweet_usage.assert_not_called()
