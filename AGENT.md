@@ -66,7 +66,7 @@ uv run pytest tests/test_content_generator.py -v
 - `requirements.txt`は廃止済み（旧・手動`pip install`用のフリーズ出力で、`pyproject.toml`/`uv.lock`と情報源が重複し乖離の原因になっていたため削除）。本番サーバー（wren）等へのデプロイでpip形式の一覧が必要な場合は、都度`uv export --no-dev --format requirements-txt`等で生成すること（常設ファイルとしては持たない）
 - **データベース**: SQLite（永続化）＋ Redis（キャッシュ・重複防止）。Redisは`brew services start redis`等で事前起動が必要
 - **開発ツール設定**: `pyproject.toml`（black line-length=120, isort, mypy）／`.flake8`（max-line-length=120）。どちらもリポジトリにコミット済みの共有設定
-- **NGワード**: `NG_KEYWORDS`環境変数または`ng_keywords.txt`で設定。**2026-08-20時点で未設定**（本番未デプロイのドライラン運用のため実害なし）。本番投稿を開始する前に必ず設定すること
+- **NGワード**: `NG_KEYWORDS`環境変数または`ng_keywords.txt`で設定。**設定済み**（約420語、ローカル・本番サーバー（wren）双方に配置済み。`.gitignore`対象の実データのためファイル自体はコミットされない）
 
 ## Project Structure
 
@@ -86,9 +86,15 @@ scripts/
 docs/
   CHARACTER_PERSONA_SAMPLE.md  # キャラクターペルソナのサンプル（本番の正ではない、下記参照）
 tests/
-  test_content_generator.py
   test_auto_quote_retweeter.py
+  test_content_generator.py
+  test_database.py
+  test_health_check.py
+  test_logging_config.py
+  test_main.py
   test_nikune_service_runner.py
+  test_scheduler.py
+  test_twitter_client.py
 data/                          # DB・テンプレートファイル
   category.tsv / tone.tsv / sample_templates.tsv   # マスタデータ（コミット対象）
   tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / templates.db
@@ -105,11 +111,14 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 
 `data/quote_comments.tsv`（gitignore対象）は、引用RTのコメント文言を`bucket`/`keyword`/`text`形式で管理する想定のファイルだが、対応するデータは非公開シート側にまだ作成されていない（2026年9月時点、該当タブ自体が存在しない）。そのためこのファイルは常に見つからず、コード側のフォールバック文言（公開済みの口癖のみを使った最小限の文言）で動作している。将来、`persona`タブの内容をもとに`bucket`/`keyword`/`text`形式のデータを新規に起草すれば、このファイルとして配置できる。
 
-## Development Status（2026-08-20時点）
+## Development Status（2026-09-22時点）
 
 - 基本機能（定期投稿、引用リツイート、DB、スケジューラー、ヘルスチェック）は実装済み
 - 引用リツイートの検出対象を「お肉」から**食・レストラン全般**（寿司・カレー・ラーメン等）に拡張済み
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
-- テスト: `tests/`に30件（content_generator/auto_quote_retweeter/service_runnerの3ファイル）
-- **本番デプロイはまだ行っていない**（ドライラン運用のみ）。ストリームB「軽量」扱いで2026-08-31にgo/no-go判断予定
-- 既知の未対応事項: NGワード未設定、季節限定カテゴリ（クリスマス等）の日付フィルタ未実装、通常投稿の絵文字（`_get_random_emoji()`）がペルソナの絵文字ルール未準拠、引用RTコメント文言（`quote_comments.tsv`）が非公開シート側に未作成でフォールバック文言のまま運用中
+- テスト: `tests/`に9ファイル（auto_quote_retweeter/content_generator/database/health_check/logging_config/main/nikune_service_runner/scheduler/twitter_client）
+- **本番デプロイ済み**: 2026年9月21〜22日に本番サーバー（wren）へデプロイ完了。`--schedule`常駐ではなくcronから`main.py --post-now`/`main.py --quote-check`を直接呼ぶ方式で、独り言ツイート・自動引用RTが稼働中
+- NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
+- 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み
+- 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装
+- 引用RTコメント文言（`quote_comments.tsv`）の状況は上記「Project Structure」「キャラクターペルソナについて」を参照（非公開シート側に対応データ未作成のため、常にフォールバック文言で動作中）
