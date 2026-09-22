@@ -92,14 +92,18 @@ tests/
 data/                          # DB・テンプレートファイル
   category.tsv / tone.tsv / sample_templates.tsv   # マスタデータ（コミット対象）
   tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / templates.db
-                                # 実データ（gitignore対象、非公開Google Sheet「tweet_template」由来）
+                                # 実データ（gitignore対象）。tweet_templates.tsv/*.generated.tsv/templates.dbは
+                                # 非公開Google Sheet「tweet_template」由来。quote_comments.tsvは対応データが
+                                # シート側に未作成のため、実際には常にフォールバックで動作している（詳細は下記参照）
 main.py                        # CLIエントリーポイント
 check_code.sh                  # 品質チェック一括実行スクリプト
 ```
 
 ## キャラクターペルソナについて
 
-`docs/CHARACTER_PERSONA_SAMPLE.md`はこのコードベースが特定のペルソナに固定されていないことを示す**サンプル**。実際に稼働中のnikuneの本番ペルソナ・ツイート候補文言は、非公開のGoogle Sheet「tweet_template」（`persona`/`tweet_templates`/`category`/`tone`タブ）で管理している。`data/quote_comments.tsv`（gitignore対象）はこのシートのエクスポートで、引用コメント生成時に読み込む。未配置時はペルソナサンプルに公開済みの口癖のみを使った最小限のフォールバックで動作する。
+`docs/CHARACTER_PERSONA_SAMPLE.md`はこのコードベースが特定のペルソナに固定されていないことを示す**サンプル**。実際に稼働中のnikuneの本番ペルソナ・ツイート候補文言は、非公開のGoogle Sheet「tweet_template」（`persona`/`tweet_templates`/`category`/`tone`タブ）で管理している。
+
+`data/quote_comments.tsv`（gitignore対象）は、引用RTのコメント文言を`bucket`/`keyword`/`text`形式で管理する想定のファイルだが、対応するデータは非公開シート側にまだ作成されていない（2026年9月時点、該当タブ自体が存在しない）。そのためこのファイルは常に見つからず、コード側のフォールバック文言（公開済みの口癖のみを使った最小限の文言）で動作している。将来、`persona`タブの内容をもとに`bucket`/`keyword`/`text`形式のデータを新規に起草すれば、このファイルとして配置できる。
 
 ## Development Status（2026-08-20時点）
 
@@ -108,4 +112,4 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
 - テスト: `tests/`に30件（content_generator/auto_quote_retweeter/service_runnerの3ファイル）
 - **本番デプロイはまだ行っていない**（ドライラン運用のみ）。ストリームB「軽量」扱いで2026-08-31にgo/no-go判断予定
-- 既知の未対応事項: NGワード未設定、季節限定カテゴリ（クリスマス等）の日付フィルタ未実装、通常投稿の絵文字（`_get_random_emoji()`）がペルソナの絵文字ルール未準拠
+- 既知の未対応事項: NGワード未設定、季節限定カテゴリ（クリスマス等）の日付フィルタ未実装、通常投稿の絵文字（`_get_random_emoji()`）がペルソナの絵文字ルール未準拠、引用RTコメント文言（`quote_comments.tsv`）が非公開シート側に未作成でフォールバック文言のまま運用中

@@ -140,15 +140,18 @@ uv run python main.py --setup-db --file data/your_templates.tsv
 - `data/category.tsv` — カテゴリマスタデータ
 - `data/tone.tsv` — トーンマスタデータ
 
-### 実データファイル（`.gitignore`対象、非公開Google Sheet「tweet_template」由来）
+### 実データファイル（`.gitignore`対象）
 
-このリポジトリはPUBLICであり、未公開のツイート候補文言・キャラクターの具体的なセリフは一切コミットしない方針。実データは非公開スプレッドシートで管理し、以下はそのエクスポート：
+このリポジトリはPUBLICであり、未公開のツイート候補文言・キャラクターの具体的なセリフは一切コミットしない方針。実データは非公開スプレッドシート「tweet_template」で管理し、以下はそのエクスポート：
 
 - `data/templates.db` — SQLiteデータベース
 - `data/tweet_templates.tsv` — 手入力テンプレート
 - `data/tweet_templates.generated.tsv` — AI生成テンプレート（ドラフト）
-- `data/quote_comments.tsv` — 引用リツイート時のコメント文言（未配置時は最小限のフォールバックのみで動作）
 - `data/exported_templates.tsv` — エクスポートされたテンプレート
+
+以下は上記スプレッドシート由来ではなく、`bucket`/`keyword`/`text`形式で管理する想定の別ファイル。対応データはスプレッドシート側にまだ作成されていないため、通常はファイルが存在せず最小限のフォールバックで動作する：
+
+- `data/quote_comments.tsv` — 引用リツイート時のコメント文言
 
 ## 📁 プロジェクト構造
 
