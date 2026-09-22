@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """データベース管理クラス（SQLite + Redis）"""
 
+    # nikuneが管理するRedisキーのプレフィックス一覧
+    # （record_tweet_usage/can_use_template/get_template_usage_statsで使用しているキーと一致させること）
+    REDIS_KEY_PREFIXES = ("tweet_history:", "template_usage:", "recent_tweet:")
+
     def __init__(
         self,
         sqlite_path: str = "data/templates.db",
@@ -374,9 +378,32 @@ class DatabaseManager:
             logger.error(f"❌ Failed to import templates from TSV: {e}")
             return 0
 
+    def _delete_keys_by_prefix(self, prefix: str) -> int:
+        """
+        指定したプレフィックスに一致するRedisキーのみをSCAN+DELETEで削除
+
+        Redisインスタンス全体をflushdbすると、同じRedis/DBインデックスを
+        共有する他のデータ（他プロセス・他用途のキー）まで消えてしまうため、
+        nikuneが実際に使用しているキーだけを対象にする。
+
+        Args:
+            prefix: 削除対象のキープレフィックス
+
+        Returns:
+            削除したキー数
+        """
+        deleted = 0
+        for key in self.redis_client.scan_iter(match=f"{prefix}*"):
+            self.redis_client.delete(key)
+            deleted += 1
+        return deleted
+
     def clear_all_templates(self) -> None:
         """
         全てのテンプレートを削除（SQLite + Redis）
+
+        Redis側は`REDIS_KEY_PREFIXES`に列挙したnikune管理キーのみを削除し、
+        `flushdb()`のようなRedisインスタンス全体への破壊的操作は行わない。
         """
         try:
             # SQLiteから全テンプレートを削除
@@ -385,9 +412,14 @@ class DatabaseManager:
             self.sqlite_conn.commit()
             logger.info("🗑️ All templates cleared from SQLite")
 
-            # Redisから全データを削除
-            self.redis_client.flushdb()
-            logger.info("🗑️ All data cleared from Redis")
+            # Redisからnikune管理キーのみを削除（flushdbは使用しない）
+            deleted_keys = 0
+            for prefix in self.REDIS_KEY_PREFIXES:
+                deleted_keys += self._delete_keys_by_prefix(prefix)
+            logger.info(
+                f"🗑️ Cleared {deleted_keys} nikune-managed Redis keys "
+                f"(prefixes: {', '.join(self.REDIS_KEY_PREFIXES)})"
+            )
 
         except Exception as e:
             logger.error(f"❌ Failed to clear templates: {e}")
@@ -446,7 +478,7 @@ class DatabaseManager:
             if hasattr(self, "sqlite_conn") and self.sqlite_conn:
                 self.sqlite_conn.close()
             if hasattr(self, "redis_client") and self.redis_client:
-                self.redis_client.close()  # type: ignore
+                self.redis_client.close()  # type: ignore[no-untyped-call]
 
             self._closed = True
             logger.info("✅ Database connections closed")

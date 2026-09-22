@@ -271,13 +271,24 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
             else:
                 # 自動検出モード
                 # 手入力テンプレートの自動検出
+                manual_tsv = "data/tweet_templates.tsv"
+                generated_tsv = "data/tweet_templates.generated.tsv"
+                manual_exists = Path(manual_tsv).exists()
+                generated_exists = Path(generated_tsv).exists()
+
+                if not manual_exists and not generated_exists:
+                    # 置き換え用のテンプレートが1件も見つからない場合、既存データを
+                    # クリアすると復元不能なテンプレート消失になるためクリアせず失敗させる
+                    print(f"❌ Template files not found: {manual_tsv}, {generated_tsv}")
+                    print("⚠️ Aborting without clearing existing templates")
+                    return False
+
                 # データベースを完全にクリア
                 print("🗑️ Clearing existing database...")
                 db_manager.clear_all_templates()
                 print("✅ Database cleared")
 
-                manual_tsv = "data/tweet_templates.tsv"
-                if Path(manual_tsv).exists():
+                if manual_exists:
                     print(f"📝 Found manual templates: {manual_tsv}")
                     manual_count = db_manager.import_templates_from_tsv(manual_tsv, clear_existing=False)
                     total_imported += manual_count
@@ -286,8 +297,7 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
                     print(f"⚠️ Manual templates not found: {manual_tsv}")
 
                 # 自動生成テンプレートの自動検出
-                generated_tsv = "data/tweet_templates.generated.tsv"
-                if Path(generated_tsv).exists():
+                if generated_exists:
                     print(f"🤖 Found generated templates: {generated_tsv}")
                     generated_count = db_manager.import_templates_from_tsv(generated_tsv, clear_existing=False)
                     total_imported += generated_count
@@ -308,11 +318,12 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
             for category, count in categories.items():
                 print(f"   - {category}: {count} templates")
 
-            if total_imported > 0:
-                print("✅ Template import completed!")
-            else:
-                print("⚠️ No templates imported")
+            if total_imported == 0:
+                # インポート0件は成功ではない（テンプレートが空のまま運用されるリスク）
+                print("❌ No templates imported")
+                return False
 
+            print("✅ Template import completed!")
             return True
 
     except Exception as e:
@@ -466,8 +477,7 @@ def main() -> None:
             success = test_all_components(dry_run=args.dry_run)
         elif args.health:
             health_checker = HealthChecker(dry_run=args.dry_run)
-            health_checker.run_diagnostic()
-            success = True
+            success = health_checker.run_diagnostic()
         elif args.post_now:
             success = post_now_command(
                 category=args.category,
