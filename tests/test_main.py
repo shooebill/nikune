@@ -1,3 +1,25 @@
+"""
+main.py の CLI ハンドラに関するテスト
+
+このファイルには独立した複数の回帰テストが含まれる。
+
+1. --setup-db（自動検出モード）のサイレント成功（過去に発生したバグ）:
+     置き換え用テンプレートファイルが存在しない、またはインポート件数が0件でも
+     成功扱いになっていた。
+
+2. --healthの終了コード（過去に発生したバグ）:
+     run_diagnostic()の戻り値を無視し、常に終了コード0を返していた。
+
+3. start_scheduler_command()（--scheduleのハンドラ）のdry_run伝播
+   （過去に発生したバグ）:
+     start_scheduler_command()がdry_runパラメータを受け取らず、SchedulerManagerに
+     渡していなかった。一方post_now_command()（--post-nowのハンドラ）は正しく
+     dry_runを伝播していたため、この非対称性が見落とされていた。結果として
+     `--schedule --dry-run`を実行しても常にdry_run=FalseでSchedulerManagerが
+     生成され、9:00/13:30/19:00の通常投稿や引用RTチェックが本番同様に
+     実行されてしまう状態だった。
+"""
+
 import pathlib
 import sys
 from typing import Any, Dict, List, Optional
@@ -104,3 +126,75 @@ class MainHealthCommandExitCodeTests(TestCase):
                 main.main()
 
         self.assertEqual(ctx.exception.code, 0)
+
+
+def _make_scheduler_manager_mock() -> "tuple[mock.MagicMock, mock.MagicMock]":
+    """SchedulerManagerのコンテキストマネージャーとしての振る舞いをモックする。"""
+    scheduler_instance = mock.MagicMock()
+    scheduler_instance.db_manager = mock.MagicMock()
+    scheduler_instance.__enter__ = mock.Mock(return_value=scheduler_instance)
+    scheduler_instance.__exit__ = mock.Mock(return_value=False)
+
+    manager_cls = mock.MagicMock(return_value=scheduler_instance)
+    return manager_cls, scheduler_instance
+
+
+class StartSchedulerCommandDryRunTests(TestCase):
+    """start_scheduler_command() が dry_run を SchedulerManager に伝播することを確認する。"""
+
+    def test_dry_run_true_is_propagated_to_scheduler_manager(self) -> None:
+        manager_cls, _scheduler_instance = _make_scheduler_manager_mock()
+
+        with mock.patch.object(main, "SchedulerManager", manager_cls):
+            with mock.patch.object(main, "setup_sample_data", return_value=True):
+                result = main.start_scheduler_command(dry_run=True)
+
+        self.assertTrue(result)
+        manager_cls.assert_called_once_with(dry_run=True)
+
+    def test_dry_run_false_is_propagated_to_scheduler_manager(self) -> None:
+        manager_cls, _scheduler_instance = _make_scheduler_manager_mock()
+
+        with mock.patch.object(main, "SchedulerManager", manager_cls):
+            with mock.patch.object(main, "setup_sample_data", return_value=True):
+                result = main.start_scheduler_command(dry_run=False)
+
+        self.assertTrue(result)
+        manager_cls.assert_called_once_with(dry_run=False)
+
+    def test_dry_run_defaults_to_false_when_omitted(self) -> None:
+        manager_cls, _scheduler_instance = _make_scheduler_manager_mock()
+
+        with mock.patch.object(main, "SchedulerManager", manager_cls):
+            with mock.patch.object(main, "setup_sample_data", return_value=True):
+                main.start_scheduler_command()
+
+        manager_cls.assert_called_once_with(dry_run=False)
+
+
+class MainArgparseScheduleDryRunTests(TestCase):
+    """argparseレベルで `--schedule --dry-run` が正しく伝播することを確認する。"""
+
+    def test_schedule_dry_run_flag_calls_start_scheduler_command_with_dry_run_true(self) -> None:
+        test_argv = ["main.py", "--schedule", "--dry-run"]
+
+        with mock.patch.object(sys, "argv", test_argv):
+            with mock.patch.object(main, "configure_logging"):
+                with mock.patch.object(main, "start_scheduler_command", return_value=True) as mocked_start:
+                    with self.assertRaises(SystemExit) as exit_ctx:
+                        main.main()
+
+        self.assertEqual(exit_ctx.exception.code, 0)
+        mocked_start.assert_called_once_with(config_file=None, dry_run=True)
+
+    def test_schedule_without_dry_run_flag_calls_start_scheduler_command_with_dry_run_false(self) -> None:
+        test_argv = ["main.py", "--schedule"]
+
+        with mock.patch.object(sys, "argv", test_argv):
+            with mock.patch.object(main, "configure_logging"):
+                with mock.patch.object(main, "start_scheduler_command", return_value=True) as mocked_start:
+                    with self.assertRaises(SystemExit) as exit_ctx:
+                        main.main()
+
+        self.assertEqual(exit_ctx.exception.code, 0)
+        mocked_start.assert_called_once_with(config_file=None, dry_run=False)

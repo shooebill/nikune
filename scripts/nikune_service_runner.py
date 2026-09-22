@@ -31,6 +31,10 @@ nikune service runner
     - LINE_NOTIFY_ENABLED:
         LINE通知（broadcast）を有効にするか（true/false, 既定: false）。
         運用開始直後はSlackのみ通知し、監視頻度が下がった段階で有効化する想定。
+    - NIKUNE_NOTIFICATION_FAILURE_MARKER:
+        Slack/LINEとも通知送信に失敗した場合に追記するマーカーファイルのパス
+        （既定: "logs/notification_failure.marker"）。Webhook失効等で通知経路が
+        死んでいても、このファイルの更新日時を監視すれば異常に気づける。
 """
 
 from __future__ import annotations
@@ -46,6 +50,8 @@ import subprocess
 import sys
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType
 from typing import Iterable, List, Optional, Sequence
 
@@ -91,8 +97,14 @@ class NotificationChannel(ABC):
         self.name = name
 
     @abstractmethod
-    def send(self, message: str) -> None:
-        """通知を送信する。"""
+    def send(self, message: str) -> bool:
+        """
+        通知を送信する。
+
+        Returns:
+            送信に成功したかどうか。NotificationManagerが「全チャネル送信失敗」を
+            検知するために使用するため、実装側は例外を握りつぶさずFalseを返すこと。
+        """
 
 
 class SlackNotification(NotificationChannel):
@@ -124,10 +136,10 @@ class SlackNotification(NotificationChannel):
             icon_emoji=os.getenv("SLACK_WEBHOOK_ICON_EMOJI"),
         )
 
-    def send(self, message: str) -> None:
+    def send(self, message: str) -> bool:
         if requests_module is None:  # pragma: no cover
             LOGGER.warning("%s 通知を送信できません（requests 未インポート）", self.name)
-            return
+            return False
 
         payload = {"text": message}
 
@@ -141,6 +153,9 @@ class SlackNotification(NotificationChannel):
             response.raise_for_status()
         except Exception as exc:  # pragma: no cover - 通信環境依存
             LOGGER.error("%s 通知の送信に失敗しました: %s", self.name, exc)
+            return False
+
+        return True
 
 
 class LineNotification(NotificationChannel):
@@ -166,10 +181,10 @@ class LineNotification(NotificationChannel):
 
         return cls(channel_token=channel_token)
 
-    def send(self, message: str) -> None:
+    def send(self, message: str) -> bool:
         if requests_module is None:  # pragma: no cover
             LOGGER.warning("%s 通知を送信できません（requests 未インポート）", self.name)
-            return
+            return False
 
         headers = {
             "Authorization": f"Bearer {self.channel_token}",
@@ -194,6 +209,41 @@ class LineNotification(NotificationChannel):
             response.raise_for_status()
         except Exception as exc:  # pragma: no cover - 通信環境依存
             LOGGER.error("%s 通知の送信に失敗しました: %s", self.name, exc)
+            return False
+
+        return True
+
+
+def _notification_failure_marker_path() -> Path:
+    """
+    通知が全チャネルで失敗した際に書き出すマーカーファイルのパス。
+
+    NIKUNE_NOTIFICATION_FAILURE_MARKER 環境変数で上書きできる
+    （既定はプロジェクトルート直下の logs/notification_failure.marker）。
+    """
+    override = os.getenv("NIKUNE_NOTIFICATION_FAILURE_MARKER")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent / "logs" / "notification_failure.marker"
+
+
+def _write_notification_failure_marker(message: str) -> None:
+    """
+    通知の全チャネル送信失敗時の最後の砦。
+
+    Slack Webhookの失効やLINEトークンの期限切れなどで通知経路そのものが
+    死んでいる場合、ログにERRORを出すだけでは誰も気づけない可能性がある。
+    運用者がファイルの存在・更新日時を監視できるよう、ローカルの既知の場所に
+    検知しやすい形でマーカーを残す（過剰な仕組みは避け、追記のみの最小実装）。
+    """
+    marker_path = _notification_failure_marker_path()
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with marker_path.open("a", encoding="utf-8") as marker_file:
+            marker_file.write(f"{timestamp} | {message}\n")
+    except OSError as exc:  # pragma: no cover - ファイルシステム依存
+        LOGGER.error("通知失敗マーカーファイルの書き込みにも失敗しました（%s）: %s", marker_path, exc)
 
 
 class NotificationManager:
@@ -202,15 +252,107 @@ class NotificationManager:
     def __init__(self, channels: Iterable[NotificationChannel]) -> None:
         self.channels = list(channels)
 
-    def send(self, message: str) -> None:
-        if not self.channels:
-            return
+    def send(self, message: str) -> bool:
+        """
+        全チャネルへ通知を送信する。
 
+        Returns:
+            いずれか1チャネルでも送信に成功したかどうか。チャネルが1つも
+            設定されていない場合はFalseを返す（この場合はマーカーは書かない。
+            未設定は意図した状態であり得るため、設定済みチャネルが実際に
+            失敗したケースと区別する）。
+        """
+        if not self.channels:
+            LOGGER.debug("通知チャネルが設定されていないため、通知は送信されません: %s", message)
+            return False
+
+        any_success = False
         for channel in self.channels:
             try:
-                channel.send(message)
+                if channel.send(message):
+                    any_success = True
             except Exception as exc:  # pragma: no cover - 念のための保護
                 LOGGER.error("通知チャネル %s の送信中に予期せぬエラー: %s", channel.name, exc)
+
+        if not any_success:
+            channel_names = ", ".join(channel.name for channel in self.channels)
+            LOGGER.error(
+                "全ての通知チャネル（%s）への送信に失敗しました。"
+                "このアラートは運用者に届いていない可能性があります: %s",
+                channel_names,
+                message,
+            )
+            _write_notification_failure_marker(message)
+
+        return any_success
+
+
+# 子プロセスの生存確認ポーリング間隔（秒）
+CHILD_WAIT_POLL_INTERVAL = 0.5
+
+# シャットダウン要求後、terminate()からkill()に切り替えるまでの猶予秒数
+SHUTDOWN_GRACE_PERIOD = 10.0
+
+
+class _RunnerState:
+    """シグナルハンドラとメインループの間で共有するシャットダウン状態。"""
+
+    def __init__(self) -> None:
+        self.should_stop = False
+
+    def request_stop(self, signum: int) -> None:
+        LOGGER.info("Signal %s received. Stopping after current process exits.", signum)
+        self.should_stop = True
+
+
+def _wait_for_child_process(
+    process: subprocess.Popen[bytes],
+    state: _RunnerState,
+    poll_interval: float = CHILD_WAIT_POLL_INTERVAL,
+    grace_period: float = SHUTDOWN_GRACE_PERIOD,
+) -> int:
+    """
+    子プロセスの終了を待つ。
+
+    以前の実装は `process.wait()` を無条件・無期限にブロックしており、
+    SIGTERM/SIGINTのハンドラが `should_stop` フラグを立てるだけだったため、
+    シグナル受信後もこの呼び出しが子プロセスの自然な終了を待ち続けてしまい、
+    運用者がタイムアウトしてSIGKILLするとこの中断で子プロセス（スケジューラー）
+    が孤児化する問題があった。
+
+    ここではタイムアウト付きの `wait()` をポーリングし、`state.should_stop` を
+    毎回確認することで、シグナル受信後は能動的に `terminate()` を呼び出し、
+    猶予期間内に終了しなければ `kill()` で確実にクリーンアップする。
+    """
+    terminate_requested_at: Optional[float] = None
+
+    while True:
+        try:
+            return process.wait(timeout=poll_interval)
+        except subprocess.TimeoutExpired:
+            pass
+        except KeyboardInterrupt:
+            # signalモジュール経由のハンドリングをすり抜けた場合の保険
+            state.should_stop = True
+
+        if not state.should_stop:
+            continue
+
+        if terminate_requested_at is None:
+            LOGGER.info("Shutdown requested. Terminating child process (pid=%s)...", process.pid)
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                # 既に終了している場合は次のwait()で回収される
+                pass
+            terminate_requested_at = time.time()
+        elif time.time() - terminate_requested_at > grace_period:
+            LOGGER.warning("Child process did not terminate gracefully. Forcing kill...")
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            return process.wait()
 
 
 def build_notification_manager() -> NotificationManager:
@@ -268,13 +410,11 @@ def main() -> None:
     LOGGER.info("nikune service runner starting on host %s", host)
     LOGGER.info("service command: %s", command)
 
-    should_stop = False
+    state = _RunnerState()
     restarts = 0
 
     def _handle_signal(signum: int, _frame: object) -> None:
-        nonlocal should_stop
-        LOGGER.info("Signal %s received. Stopping after current process exits.", signum)
-        should_stop = True
+        state.request_stop(signum)
 
     # Windows では SIGTERM が存在しないため、プラットフォーム判定
     signals = [signal.SIGINT]
@@ -291,31 +431,20 @@ def main() -> None:
         LOGGER.info("Launching nikune scheduler process...")
         process = subprocess.Popen(command)
 
-        try:
-            return_code = process.wait()
-        except KeyboardInterrupt:
-            LOGGER.info("KeyboardInterrupt received. Terminating child process...")
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                LOGGER.warning("Child process did not terminate gracefully. Forcing kill...")
-                process.kill()
-                process.wait()
-            return_code = 0
-            should_stop = True
+        return_code = _wait_for_child_process(process, state)
 
         runtime = time.time() - start_time
         LOGGER.info("Process exited with code %s after %.1f seconds.", return_code, runtime)
 
-        # 異常終了時は通知を送信
-        if return_code != 0:
+        # シャットダウン要求による意図的な終了の場合は異常終了通知を送らない
+        # （terminate()/kill()によりreturn_codeが非0になり得るため）
+        if return_code != 0 and not state.should_stop:
             notification_manager.send(
                 f"[WARNING] nikune scheduler exited with code {return_code} "
                 f"(runtime: {runtime:.1f}s) on host {host}. Restarting..."
             )
 
-        if should_stop:
+        if state.should_stop:
             LOGGER.info("Stop flag detected. Exiting service runner.")
             break
 
