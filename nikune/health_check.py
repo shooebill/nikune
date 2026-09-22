@@ -123,8 +123,13 @@ class HealthChecker:
                 "error": str(e),
             }
 
-    def run_diagnostic(self) -> None:
-        """詳細な診断を実行"""
+    def run_diagnostic(self) -> bool:
+        """
+        詳細な診断を実行
+
+        Returns:
+            全コンポーネントが健全な場合True。1つでも不健全ならFalse
+        """
         print(f"🐻 {self.bot_name} - System Diagnostic")
         print("=" * 50)
 
@@ -156,7 +161,12 @@ class HealthChecker:
             except Exception as e:
                 print(f"❌ Failed to get template details: {e}")
 
-        print("\n🎉 Diagnostic completed!")
+        if health_results["overall"]:
+            print("\n🎉 Diagnostic completed!")
+        else:
+            print("\n⚠️ Diagnostic completed with failures!")
+
+        return health_results["overall"]
 
 
 # テスト用関数
