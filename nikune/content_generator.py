@@ -17,7 +17,10 @@ from .database import DatabaseManager
 from .twitter_client import _safe_text_length
 
 # ログ設定
-logging.basicConfig(level=logging.INFO)
+# ロギングの基本設定（ハンドラ・フォーマット）はエントリポイント（main.py）側で行う。
+# ライブラリ側のモジュールでlogging.basicConfig()を呼ぶと、最初に呼ばれた設定だけが
+# 有効になるPythonの仕様上、import順序次第でmain.py側のフォーマット設定が
+# 無効化されてしまうため、ここではLoggerの取得のみを行う。
 logger = logging.getLogger(__name__)
 
 

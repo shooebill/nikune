@@ -23,8 +23,30 @@ from nikune.utils import log_errors
 # 定数定義
 MAX_ERRORS_TO_DISPLAY = 3  # 表示するエラーの最大数
 
+# ログフォーマット定義
+# タイムスタンプ・ロガー名（モジュール名）・ログレベル・メッセージを出力する。
+# このフォーマットはアプリケーションのエントリポイントである本モジュールでのみ設定し、
+# 他のモジュール（nikune配下等）では設定しない。logging.basicConfig()は最初に呼ばれた
+# 設定のみが有効になるため、他モジュールがimport時にbasicConfig()を呼んでしまうと、
+# import順序次第でこのフォーマットが無効化されてしまう。
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
 # ロガー設定
 logger = logging.getLogger(__name__)
+
+
+def configure_logging(verbose: bool = False) -> None:
+    """
+    アプリケーション全体のロギング設定を行う
+
+    ロギングの基本設定（ハンドラ・フォーマット）を行うのはこの関数のみ。
+    他のモジュールはlogging.getLogger(__name__)でロガーを取得するだけにする。
+
+    Args:
+        verbose: Trueの場合はDEBUGレベル、Falseの場合はINFOレベルでログ出力する
+    """
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=log_level, format=LOG_FORMAT)
 
 
 def setup_sample_data(db_manager: DatabaseManager) -> bool:
@@ -431,9 +453,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # ログレベル設定
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
+    # ログ設定
+    configure_logging(verbose=args.verbose)
 
     # 開始メッセージ
     logger.info(f"🐻 {BOT_NAME} started")
