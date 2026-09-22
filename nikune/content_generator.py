@@ -9,7 +9,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
@@ -22,6 +22,19 @@ from .twitter_client import _safe_text_length
 # 有効になるPythonの仕様上、import順序次第でmain.py側のフォーマット設定が
 # 無効化されてしまうため、ここではLoggerの取得のみを行う。
 logger = logging.getLogger(__name__)
+
+
+class GeneratedTweetContent(NamedTuple):
+    """
+    generate_tweet_content()の戻り値
+
+    テンプレートの重複防止用クールダウンは、実際の投稿が成功した後に呼び出し元が
+    record_tweet_usage()を呼んで記録する。そのために必要な情報（テンプレートID）を
+    生成結果と一緒に保持しておく。
+    """
+
+    text: str
+    template_id: int
 
 
 class ContentGenerator:
@@ -165,6 +178,11 @@ class ContentGenerator:
 
         # お肉キーワードは絵文字ルール（肉トピック判定）用に集合化しておく
         self._meat_keyword_set = frozenset(self.MEAT_KEYWORDS)
+        # 大文字小文字を無視した照合用（食キーワードのマッチはre.IGNORECASEで行われるため、
+        # マッチした元テキストの大文字小文字のままの部分文字列とここを比較することになる。
+        # 例えば"BBQ"を含むMEAT_KEYWORDSに対し、原文が"bbq"だった場合でも肉トピックとして
+        # 検出できるよう、比較は常にlower()した値同士で行う）
+        self._meat_keyword_set_lower = frozenset(kw.lower() for kw in self.MEAT_KEYWORDS)
 
         # お肉＋食・レストランキーワードをレベル別にマージ（優先度別分類）
         self._combined_keywords_priority: Dict[str, Dict[str, Any]] = self._merge_keyword_priorities(
@@ -407,16 +425,23 @@ class ContentGenerator:
         suffix = f" {random.choice(('🥩', '🍖'))}" if is_meat_topic else ""
         return f"{prefix}{text}{suffix}"
 
-    def generate_tweet_content(self, category: Optional[str] = None, tone: Optional[str] = None) -> Optional[str]:
+    def generate_tweet_content(
+        self, category: Optional[str] = None, tone: Optional[str] = None
+    ) -> Optional[GeneratedTweetContent]:
         """
         ツイートコンテンツを生成
+
+        注意: このメソッドはRedisへの使用履歴記録（テンプレートのクールダウン消費）を
+        行わない。実際にツイート投稿が成功したことを確認した後、呼び出し元が
+        record_tweet_usage()を呼んで記録すること。生成しただけで投稿に失敗した場合に
+        クールダウンだけが消費されてロールバックできなくなる問題を避けるため。
 
         Args:
             category: カテゴリ（お肉、日常、季節等）
             tone: トーン（可愛い、元気、癒し等）
 
         Returns:
-            生成されたツイート内容（Noneの場合は生成失敗）
+            生成されたツイート内容とテンプレートIDのペア（Noneの場合は生成失敗）
         """
         try:
             # 使用可能なテンプレートを取得
@@ -433,15 +458,26 @@ class ContentGenerator:
                 logger.warning("⚠️ Failed to process template")
                 return None
 
-            # 使用履歴を記録
-            self.db_manager.record_tweet_usage(int(template["id"]), tweet_content)
-
-            logger.info(f"🎲 Generated tweet content: Template ID={template['id']}")
-            return tweet_content
+            template_id = int(template["id"])
+            logger.info(f"🎲 Generated tweet content: Template ID={template_id}")
+            return GeneratedTweetContent(text=tweet_content, template_id=template_id)
 
         except Exception as e:
             logger.error(f"❌ Failed to generate tweet content: {e}")
             return None
+
+    def record_tweet_usage(self, template_id: int, tweet_text: str) -> None:
+        """
+        テンプレートの使用履歴（クールダウン）を記録する
+
+        generate_tweet_content()は副作用を持たないため、実際にツイート投稿が
+        成功したことを確認した呼び出し元がこのメソッドを呼んで記録する。
+
+        Args:
+            template_id: 使用したテンプレートのID（generate_tweet_content()の戻り値参照）
+            tweet_text: 実際に投稿されたツイート内容
+        """
+        self.db_manager.record_tweet_usage(template_id, tweet_text)
 
     def _process_template(self, template: Dict[str, str]) -> Optional[str]:
         """
@@ -792,7 +828,10 @@ class ContentGenerator:
 
             is_food_related = len(matched_keywords) > 0
             deduped_keywords = list(set(matched_keywords))
-            is_meat_topic = any(keyword in self._meat_keyword_set for keyword in deduped_keywords)
+            # マッチしたキーワードはre.IGNORECASEマッチのため原文の大文字小文字のまま
+            # （例: "bbq"）になっている。MEAT_KEYWORDS側の表記（例: "BBQ"）と大文字小文字を
+            # 無視して比較する。
+            is_meat_topic = any(keyword.lower() in self._meat_keyword_set_lower for keyword in deduped_keywords)
 
             if is_food_related:
                 logger.debug(
@@ -920,16 +959,19 @@ def test_content_generator() -> None:
 
             # コンテンツ生成テスト
             for i in range(3):
-                content = generator.generate_tweet_content()
-                if content:
-                    print(f"✅ Generated content {i+1}: {content}")
+                generated = generator.generate_tweet_content()
+                if generated:
+                    print(f"✅ Generated content {i+1}: {generated.text}")
+                    # 実際に投稿したことにして使用履歴を記録（テスト用）
+                    generator.record_tweet_usage(generated.template_id, generated.text)
                 else:
                     print(f"❌ Failed to generate content {i+1}")
 
             # カテゴリ指定テスト
-            meat_content = generator.generate_tweet_content(category="お肉")
-            if meat_content:
-                print(f"✅ Generated meat content: {meat_content}")
+            meat_generated = generator.generate_tweet_content(category="お肉")
+            if meat_generated:
+                print(f"✅ Generated meat content: {meat_generated.text}")
+                generator.record_tweet_usage(meat_generated.template_id, meat_generated.text)
 
             # 統計情報取得
             stats = generator.get_content_stats()

@@ -146,19 +146,21 @@ class SchedulerManager:
             # カテゴリをランダム選択
             selected_category = random.choice(categories) if categories else None
 
-            # コンテンツ生成
-            tweet_content = self.content_generator.generate_tweet_content(category=selected_category)
+            # コンテンツ生成（この時点ではテンプレートのクールダウンは消費されない）
+            generated = self.content_generator.generate_tweet_content(category=selected_category)
 
-            if not tweet_content:
+            if not generated:
                 logger.warning("⚠️ No tweet content generated, skipping post")
                 return
 
             # ツイート投稿
-            tweet_id = self.twitter_client.post_tweet(tweet_content)
+            tweet_id = self.twitter_client.post_tweet(generated.text)
 
             if tweet_id:
+                # 投稿成功後にのみテンプレートの使用履歴（クールダウン）を記録する
+                self.content_generator.record_tweet_usage(generated.template_id, generated.text)
                 logger.info(f"🎉 Scheduled tweet posted successfully! ID: {tweet_id}")
-                logger.info(f"📝 Content: {tweet_content}")
+                logger.info(f"📝 Content: {generated.text}")
             else:
                 logger.error("❌ Failed to post scheduled tweet")
 
@@ -298,19 +300,21 @@ class SchedulerManager:
         try:
             logger.info("📤 Posting tweet now...")
 
-            # コンテンツ生成
-            tweet_content = self.content_generator.generate_tweet_content(category=category, tone=tone)
+            # コンテンツ生成（この時点ではテンプレートのクールダウンは消費されない）
+            generated = self.content_generator.generate_tweet_content(category=category, tone=tone)
 
-            if not tweet_content:
+            if not generated:
                 logger.warning("⚠️ No tweet content generated")
                 return False
 
             # ツイート投稿
-            tweet_id = self.twitter_client.post_tweet(tweet_content)
+            tweet_id = self.twitter_client.post_tweet(generated.text)
 
             if tweet_id:
+                # 投稿成功後にのみテンプレートの使用履歴（クールダウン）を記録する
+                self.content_generator.record_tweet_usage(generated.template_id, generated.text)
                 logger.info(f"🎉 Tweet posted successfully! ID: {tweet_id}")
-                logger.info(f"📝 Content: {tweet_content}")
+                logger.info(f"📝 Content: {generated.text}")
                 return True
             else:
                 logger.error("❌ Failed to post tweet")
