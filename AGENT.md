@@ -23,6 +23,10 @@ uv run python main.py --post-now --category お肉
 uv run python main.py --quote-check
 uv run python main.py --quote-check --dry-run   # API呼び出しなしのドライラン
 
+# ログ確認（その回に異常があればSlackへ通知。--dry-runで送らずに通知文を表示）
+uv run python scripts/check_logs.py post 09:00
+uv run python scripts/check_logs.py quote 12:30 --log-file /path/to/test.log --dry-run
+
 # スケジューラー起動（継続実行、9:00/13:30/19:00投稿）
 uv run python main.py --schedule
 
@@ -84,14 +88,17 @@ nikune/                        # メインパッケージ
   quote_safety.py              # 引用RT候補の安全判定（質問・しきい値・判定ルール）
   post_safety.py               # 自分の投稿の投稿直前チェック（警告のみ。止めるかどうかはshould_post()で切替）
   emoji_rules.py               # 通常投稿の絵文字ルール（許可リスト方式: 文頭🐻 1つ＋🥩/🍖合わせて1つまで）
+  notifications.py             # Slack/LINE通知の共通部品（NotificationManager。全チャネル失敗時はマーカーファイル）
 config/
   settings.py                  # 環境変数管理
 scripts/
-  nikune_service_runner.py     # 自動起動・Slack/LINE通知（NotificationManager）
+  check_logs.py                # cron運用時のログ確認。その回のログを読み、異常時のみ通知（本番はこちら）
+  nikune_service_runner.py     # 常駐運用（--schedule）時の自動起動・異常終了時の通知（本番では未使用）
 docs/
   CHARACTER_PERSONA_SAMPLE.md  # キャラクターペルソナのサンプル（本番の正ではない、下記参照）
 tests/
   test_auto_quote_retweeter.py
+  test_check_logs.py
   test_content_generator.py
   test_database.py
   test_health_check.py
@@ -118,13 +125,14 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 
 `data/quote_comments.tsv`（gitignore対象）は、引用RTのコメント文言を`bucket`/`keyword`/`text`形式で管理する想定のファイルだが、対応するデータは非公開シート側にまだ作成されていない（2026年9月時点、該当タブ自体が存在しない）。そのためこのファイルは常に見つからず、コード側のフォールバック文言（公開済みの口癖のみを使った最小限の文言）で動作している。将来、`persona`タブの内容をもとに`bucket`/`keyword`/`text`形式のデータを新規に起草すれば、このファイルとして配置できる。
 
-## Development Status（2026-09-22時点）
+## Development Status（2026-09-23時点）
 
 - 基本機能（定期投稿、引用リツイート、DB、スケジューラー、ヘルスチェック）は実装済み
 - 引用リツイートの検出対象を「お肉」から**食・レストラン全般**（寿司・カレー・ラーメン等）に拡張済み
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
-- テスト: `tests/`に11ファイル（auto_quote_retweeter/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
+- テスト: `tests/`に12ファイル（auto_quote_retweeter/check_logs/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
 - **本番デプロイ済み**: 2026年9月21〜22日に本番サーバー（wren）へデプロイ完了。`--schedule`常駐ではなくcronから`main.py --post-now`/`main.py --quote-check`を直接呼ぶ方式で、独り言ツイート・自動引用RTが稼働中
+- **本番の異常通知**: cron方式では見張り役（`nikune_service_runner.py`）を使わないため、見張り役の通知は本番で一度も送られていなかった。各回の数分後に`scripts/check_logs.py`をcronで起動し、その回のログに異常（成功の記録なし・失敗の記録・TypeSafeでチェックできなかった・キー未設定・Jevの警告）があるときだけSlackへ通知する方式にした（通知部品は`nikune/notifications.py`に共通化）。LINEは`LINE_NOTIFY_ENABLED=false`のままオフ。**wrenへのcrontab追加と実送信の確認は未完了**
 - NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
 - 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み。許可リスト方式（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで、それ以外は警告ログのみ）に拡張済み
 - 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装

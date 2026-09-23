@@ -16,6 +16,8 @@ runner = cast(
     Any,
     import_module("scripts.nikune_service_runner"),
 )
+# 通知の部品は nikune/notifications.py に移した（見張り役はそれを import して使う）
+notifications = cast(Any, import_module("nikune.notifications"))
 
 
 class DummyResponse:
@@ -70,8 +72,8 @@ class NotificationManagerTests(TestCase):
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch.object(runner, "requests_module", dummy_requests):
-                manager = runner.build_notification_manager()
+            with mock.patch.object(notifications, "requests_module", dummy_requests):
+                manager = notifications.build_notification_manager()
 
                 self.assertEqual(len(manager.channels), 2)
 
@@ -111,7 +113,7 @@ class NotificationManagerTests(TestCase):
         dummy_requests = DummyRequests()
 
         with mock.patch.dict(os.environ, {}, clear=True):
-            manager = runner.build_notification_manager()
+            manager = notifications.build_notification_manager()
             self.assertEqual(len(manager.channels), 0)
 
             # Should not raise even when no channels are configured
@@ -126,8 +128,8 @@ class NotificationManagerTests(TestCase):
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch.object(runner, "requests_module", dummy_requests):
-                manager = runner.build_notification_manager()
+            with mock.patch.object(notifications, "requests_module", dummy_requests):
+                manager = notifications.build_notification_manager()
 
                 self.assertEqual(len(manager.channels), 1)
                 manager.send("Slack通知のみ")
@@ -147,8 +149,8 @@ class NotificationManagerTests(TestCase):
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch.object(runner, "requests_module", dummy_requests):
-                manager = runner.build_notification_manager()
+            with mock.patch.object(notifications, "requests_module", dummy_requests):
+                manager = notifications.build_notification_manager()
 
                 self.assertEqual(len(manager.channels), 1)
                 manager.send("LINE通知のみ")
@@ -178,7 +180,7 @@ class NotificationManagerTests(TestCase):
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
-            manager = runner.build_notification_manager()
+            manager = notifications.build_notification_manager()
 
         self.assertEqual(len(manager.channels), 0)
 
@@ -188,7 +190,7 @@ class NotificationManagerTests(TestCase):
         }
 
         with mock.patch.dict(os.environ, env, clear=True):
-            manager = runner.build_notification_manager()
+            manager = notifications.build_notification_manager()
 
         self.assertEqual(len(manager.channels), 0)
 
@@ -201,7 +203,7 @@ class NotificationManagerTests(TestCase):
         succeeding_channel.name = "SucceedingChannel"
         succeeding_channel.send = mock.Mock()
 
-        manager = runner.NotificationManager([failing_channel, succeeding_channel])
+        manager = notifications.NotificationManager([failing_channel, succeeding_channel])
 
         # Should not raise even if one channel fails
         manager.send("複数チャネル通知")
@@ -265,8 +267,8 @@ class NotificationManagerEscalationTests(TestCase):
         env = {"SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/ok"}
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch.object(runner, "requests_module", dummy_requests):
-                manager = runner.build_notification_manager()
+            with mock.patch.object(notifications, "requests_module", dummy_requests):
+                manager = notifications.build_notification_manager()
                 result = manager.send("正常系の通知")
 
         self.assertTrue(result)
@@ -285,9 +287,9 @@ class NotificationManagerEscalationTests(TestCase):
             }
 
             with mock.patch.dict(os.environ, env, clear=True):
-                with mock.patch.object(runner, "requests_module", failing_requests):
-                    manager = runner.build_notification_manager()
-                    with self.assertLogs(runner.LOGGER, level="ERROR") as log_ctx:
+                with mock.patch.object(notifications, "requests_module", failing_requests):
+                    manager = notifications.build_notification_manager()
+                    with self.assertLogs(notifications.LOGGER, level="ERROR") as log_ctx:
                         result = manager.send("[CRITICAL] テスト用の重大アラート")
 
         self.assertFalse(result)
@@ -307,8 +309,8 @@ class NotificationManagerEscalationTests(TestCase):
             }
 
             with mock.patch.dict(os.environ, env, clear=True):
-                with mock.patch.object(runner, "requests_module", failing_requests):
-                    manager = runner.build_notification_manager()
+                with mock.patch.object(notifications, "requests_module", failing_requests):
+                    manager = notifications.build_notification_manager()
                     manager.send("[CRITICAL] 通知経路が死んでいるテスト")
 
             self.assertTrue(marker_path.exists())
@@ -321,7 +323,7 @@ class NotificationManagerEscalationTests(TestCase):
             env = {"NIKUNE_NOTIFICATION_FAILURE_MARKER": str(marker_path)}
 
             with mock.patch.dict(os.environ, env, clear=True):
-                manager = runner.build_notification_manager()
+                manager = notifications.build_notification_manager()
                 result = manager.send("通知チャネル未設定時のテスト")
 
             self.assertFalse(result)

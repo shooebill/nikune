@@ -22,7 +22,7 @@
 - ✅ **動的コンテンツ**: 時間・挨拶の自動挿入
 - ✅ **カテゴリ・トーン管理**: 柔軟なテンプレート分類
 - ✅ **ドライランモード**: 実際の投稿・API呼び出しを行わない安全なテスト実行
-- ✅ **自動起動・監視**: launchd/systemd常駐、異常終了時の自動再起動、Slack/LINE通知
+- ✅ **自動起動・監視**: cron運用時はログ確認スクリプトで異常時のみSlack/LINE通知。launchd/systemd常駐時は異常終了時の自動再起動と通知
 - ✅ **クロスプラットフォーム対応**: Windows/Mac/Linux対応
 
 ## 🛠️ セットアップ
@@ -85,7 +85,7 @@ NG_KEYWORDS=
 # TYPESAFE_MODEL=jev-1.13.0        # 既定はバージョン固定。上げるときはしきい値を再検証する
 # TYPESAFE_TIMEOUT_SECONDS=10
 
-# 通知（任意、自動起動時のみ使用）
+# 通知（任意。cron運用時のログ確認・常駐時のサービスラッパーで使用）
 # SLACK_WEBHOOK_URL=
 # LINE_CHANNEL_ACCESS_TOKEN=
 # LINE_NOTIFY_ENABLED=false
@@ -175,13 +175,16 @@ nikune/
 │   ├── scheduler.py                  # ⏰ 自動投稿スケジューラー
 │   ├── twitter_client.py             # 🐦 Twitter API v2クライアント
 │   ├── health_check.py               # 💚 システムヘルスチェック
+│   ├── notifications.py              # 🔔 Slack/LINE通知の共通部品
 │   └── utils.py                      # 共通ユーティリティ
 ├── 📁 scripts/
-│   └── nikune_service_runner.py      # 自動起動ラッパー・Slack/LINE通知
+│   ├── check_logs.py                 # cron運用時のログ確認（異常時のみ通知）
+│   └── nikune_service_runner.py      # 常駐運用時の自動起動ラッパー（異常終了時に通知）
 ├── 📁 docs/
 │   └── CHARACTER_PERSONA_SAMPLE.md   # キャラクターペルソナのサンプル
 ├── 📁 tests/
 │   ├── test_auto_quote_retweeter.py
+│   ├── test_check_logs.py
 │   ├── test_content_generator.py
 │   ├── test_database.py
 │   ├── test_health_check.py
@@ -315,7 +318,24 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
 - `LINE_CHANNEL_ACCESS_TOKEN` 未設定、または `LINE_NOTIFY_ENABLED` が `false`（既定）の場合は
   LINE 通知は送信されません
 
-### 3. サービスラッパーの利用
+### 3. cron 運用でのログ確認・通知
+cron から `main.py --post-now` / `--quote-check` を1回ずつ起動する運用では、サービスラッパーは使わないため、
+代わりに `scripts/check_logs.py` を各回の数分後に起動してログを確認します。異常があるときだけ通知し、正常なら何も送りません。
+
+- 使い方: `uv run python scripts/check_logs.py <post|quote> <予定時刻HH:MM>`（例: `post 09:00`）
+  - `--log-file` で読むログを指定（既定は `$NIKUNE_LOG_DIR/post.log`・`quote.log`、`NIKUNE_LOG_DIR` の既定は `/mnt/data/nikune/logs`）
+  - `--dry-run` で通知を送らず通知文を表示
+- 通知する条件: その回に成功の記録がない（cron が動かなかった・起動時に落ちた場合も含む）／失敗の記録（`❌` の失敗メッセージ・`ERROR` 行・`Traceback`）がある／
+  TypeSafe でチェックできなかった（`UNCHECKED`・`UNAVAILABLE`）／投稿直前チェックでキー未設定（`DISABLED`）／Jev の警告（`WARN`）
+- レベルが `WARNING` の行を一律に通知することはしない（毎回出る既知の警告があるため）
+- 通知文のログ行は、Webhook URL・トークン・API キーらしきものを伏せ字にしてから送る
+- crontab の例（予定時刻の5分後に確認）:
+
+```
+5 9 * * * cd $HOME/nikune && $HOME/.local/bin/uv run --no-sync python scripts/check_logs.py post 09:00 >> /path/to/logs/check.log 2>&1
+```
+
+### 4. サービスラッパーの利用（常駐運用の場合）
 - `uv run python scripts/nikune_service_runner.py` でスケジューラーが常駐起動します
 - 既定では `main.py --schedule` を実行し、異常終了時に 5 秒待って自動再起動します
 - 主な環境変数
@@ -323,7 +343,7 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
   - `NIKUNE_RESTART_DELAY`: 再起動までの待機秒数（既定: 5）
   - `NIKUNE_MAX_RESTARTS`: 再起動上限を設定したい場合
 
-### 4. macOS (launchd) で常駐起動
+### 5. macOS (launchd) で常駐起動
 1. `~/Library/LaunchAgents/com.nikune.bot.plist` を作成し、以下の内容を保存
 
 ```xml
@@ -360,7 +380,7 @@ MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
 3. `launchctl load ~/Library/LaunchAgents/com.nikune.bot.plist`
 4. 停止・再起動は `launchctl unload` / `launchctl kickstart` で実施
 
-### 5. Linux (systemd) への転用（参考）
+### 6. Linux (systemd) への転用（参考）
 - `/etc/systemd/system/nikune.service` の例
 
 ```ini
