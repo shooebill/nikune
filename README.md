@@ -80,6 +80,11 @@ REDIS_DB=0
 # NGワード（本番投稿前に必須。カンマ区切り、または NG_KEYWORDS_FILE でファイル指定）
 NG_KEYWORDS=
 
+# TypeSafe (Jev) による引用RT候補の安全判定（任意。未設定なら判定なしで従来どおり動作）
+# TYPESAFE_API_KEY=
+# TYPESAFE_MODEL=jev-1.13.0        # 既定はバージョン固定。上げるときはしきい値を再検証する
+# TYPESAFE_TIMEOUT_SECONDS=10
+
 # 通知（任意、自動起動時のみ使用）
 # SLACK_WEBHOOK_URL=
 # LINE_CHANNEL_ACCESS_TOKEN=

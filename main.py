@@ -373,6 +373,10 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
                 logger.info(f"   📊 Checked tweets: {results['checked_tweets']}")
                 logger.info(f"   🍽️ Food-related found: {results['food_related_found']}")
                 logger.info(f"   🔄 Quote tweets posted: {results['quote_posted']}")
+                logger.info(
+                    f"   🧭 Jev: skipped {results.get('skipped_by_jev', 0)}, "
+                    f"unavailable {results.get('jev_unavailable', 0)}"
+                )
 
                 errors = results.get("errors", [])
                 if errors:

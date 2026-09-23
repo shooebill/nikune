@@ -1,7 +1,10 @@
 from types import SimpleNamespace
+from typing import Any, Dict
 from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
+from nikune.jev_checker import JevChecker
+from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decide, is_uncertain
 from nikune.twitter_client import TwitterClient
 
 
@@ -134,3 +137,127 @@ class FoodSearchQueryTests(TestCase):
             candidates = retweeter._fetch_search_candidates()
 
         self.assertEqual(candidates, [])
+
+
+def _jev_response(nouls: Dict[str, float], value_score: float = 2.0) -> SimpleNamespace:
+    return SimpleNamespace(
+        model="jev-1.13.0",
+        nouls={key: SimpleNamespace(noul=value) for key, value in nouls.items()},
+        scores={VALUE_SCORE_KEY: SimpleNamespace(score=value_score)},
+    )
+
+
+SAFE_NOULS: Dict[str, float] = {SUITABLE_KEY: 0.95, **{key: 0.03 for key in AVOID_KEYS}}
+
+FOOD_TWEET = SimpleNamespace(
+    id="jev_candidate_1",
+    text="テストのカレーを食べた",
+    author_id="jev_user_1",
+    author_username="jev_user_1",
+    created_at="2026-09-23T09:00:00.000Z",
+)
+
+
+class JevQuoteSafetyTests(TestCase):
+    """キーワード一致を通過した候補に対するJev二次フィルタの配線テスト（Jevはモック）"""
+
+    def _run(self, client: mock.MagicMock) -> tuple[AutoQuoteRetweeter, Dict[str, Any], mock.MagicMock]:
+        retweeter = AutoQuoteRetweeter(
+            db_manager=mock.MagicMock(), dry_run=True, jev_checker=JevChecker(api_key="fake", client=client)
+        )
+        with (
+            mock.patch.object(retweeter, "_get_mock_timeline", return_value=[FOOD_TWEET]),
+            mock.patch.object(
+                retweeter.content_generator, "generate_quote_comment", return_value="テスト"
+            ) as generate_comment,
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return retweeter, results, generate_comment
+
+    def test_safe_candidate_proceeds_to_quote(self) -> None:
+        client = mock.MagicMock()
+        client.system_one.return_value = _jev_response(SAFE_NOULS)
+
+        retweeter, results, generate_comment = self._run(client)
+
+        self.assertTrue(results["success"])
+        client.system_one.assert_called_once()
+        generate_comment.assert_called_once()
+        self.assertEqual(results["skipped_by_jev"], 0)
+        self.assertIn(FOOD_TWEET.id, retweeter.processed_tweets)
+        # 候補本文がStateとして渡っている
+        state = client.system_one.call_args.kwargs["state"]
+        self.assertEqual(state["candidate_post"]["text"], FOOD_TWEET.text)
+
+    def test_high_avoid_noul_skips_candidate(self) -> None:
+        client = mock.MagicMock()
+        client.system_one.return_value = _jev_response({**SAFE_NOULS, "tragedy_context": 0.9})
+
+        retweeter, results, generate_comment = self._run(client)
+
+        self.assertTrue(results["success"])
+        generate_comment.assert_not_called()
+        self.assertEqual(results["skipped_by_jev"], 1)
+        # 判定済みの不適切候補は処理済みにして再問い合わせしない
+        self.assertIn(FOOD_TWEET.id, retweeter.processed_tweets)
+
+    def test_low_suitable_noul_skips_candidate(self) -> None:
+        client = mock.MagicMock()
+        client.system_one.return_value = _jev_response({**SAFE_NOULS, SUITABLE_KEY: 0.1})
+
+        _, results, generate_comment = self._run(client)
+
+        generate_comment.assert_not_called()
+        self.assertEqual(results["skipped_by_jev"], 1)
+
+    def test_uncertain_noul_skips_candidate(self) -> None:
+        # しきい値だけなら通る値でも、0.5付近（あいまい帯）なら引用しない
+        with mock.patch("nikune.quote_safety.AVOID_THRESHOLD", 0.9):
+            client = mock.MagicMock()
+            client.system_one.return_value = _jev_response({**SAFE_NOULS, "promotion_context": 0.5})
+            _, results, generate_comment = self._run(client)
+
+        generate_comment.assert_not_called()
+        self.assertEqual(results["skipped_by_jev"], 1)
+
+    def test_typesafe_failure_skips_without_exception_and_is_not_marked_processed(self) -> None:
+        client = mock.MagicMock()
+        client.system_one.side_effect = RuntimeError("service down")
+
+        retweeter, results, generate_comment = self._run(client)
+
+        self.assertTrue(results["success"])
+        self.assertEqual(results["errors"], [])
+        generate_comment.assert_not_called()
+        self.assertEqual(results["jev_unavailable"], 1)
+        self.assertEqual(results["quote_posted"], 0)
+        # 一時的な障害で候補を失わないよう処理済みにはしない
+        self.assertNotIn(FOOD_TWEET.id, retweeter.processed_tweets)
+
+    def test_missing_key_behaves_as_before(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=mock.MagicMock(), dry_run=True)
+        self.assertFalse(retweeter.jev_checker.enabled)
+
+        with (
+            mock.patch("nikune.jev_checker.TypeSafeClient") as client_cls,
+            mock.patch.object(retweeter, "_get_mock_timeline", return_value=[FOOD_TWEET]),
+        ):
+            results = retweeter.check_and_quote_tweets()
+
+        client_cls.assert_not_called()
+        self.assertTrue(results["success"])
+        self.assertEqual(results["food_related_found"], 1)
+        self.assertEqual(results["skipped_by_jev"], 0)
+        self.assertEqual(results["jev_unavailable"], 0)
+        self.assertIn(FOOD_TWEET.id, retweeter.processed_tweets)
+
+
+class QuoteSafetyRuleTests(TestCase):
+    def test_uncertain_band(self) -> None:
+        self.assertTrue(is_uncertain(0.5))
+        self.assertTrue(is_uncertain(0.6))
+        self.assertFalse(is_uncertain(0.9))
+        self.assertFalse(is_uncertain(0.05))
+
+    def test_decide_accepts_clear_safe_values(self) -> None:
+        self.assertEqual(decide(SAFE_NOULS), [])
