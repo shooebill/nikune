@@ -16,6 +16,7 @@ from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.health_check import HealthChecker
+from nikune.post_safety import PostSafetyVerdict
 from nikune.scheduler import SchedulerManager
 from nikune.twitter_client import TwitterClient
 from nikune.utils import log_errors
@@ -155,6 +156,14 @@ def test_all_components(dry_run: bool = False) -> bool:
         return False
 
 
+def _print_dry_run_check(verdict: Optional[PostSafetyVerdict]) -> None:
+    """ドライラン時に投稿直前チェックの結果を表示する（詳細は1行ログ側に出る）"""
+    if verdict is None:
+        print("⚠️ [DRY RUN] Pre-post check could not run")
+    else:
+        print(f"🧭 [DRY RUN] Pre-post check: {verdict.label}")
+
+
 def post_now_command(
     category: Optional[str] = None,
     tone: Optional[str] = None,
@@ -173,6 +182,8 @@ def post_now_command(
             if text:
                 print(f"📝 Custom tweet: {text}")
                 if dry_run:
+                    # ドライランでも投稿直前チェック（Jev）は実行する（判定の確認のため。Xへの投稿はしない）
+                    _print_dry_run_check(scheduler.run_pre_post_check(text, route="custom(dry-run)"))
                     print("🔍 [DRY RUN] Would post this custom tweet")
                     return True
                 else:
@@ -188,6 +199,11 @@ def post_now_command(
                     # テンプレートのクールダウンも消費しない）
                     generated = scheduler.content_generator.generate_tweet_content(category, tone)
                     if generated:
+                        # ドライランでも投稿直前チェック（Jev）は実行する（判定の確認のため。Xへの投稿はしない）
+                        verdict = scheduler.run_pre_post_check(
+                            generated.text, route="post_now(dry-run)", template_id=generated.template_id
+                        )
+                        _print_dry_run_check(verdict)
                         print(f"🔍 [DRY RUN] Would post: {generated.text}")
                         return True
                     else:

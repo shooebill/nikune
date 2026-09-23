@@ -67,7 +67,7 @@ uv run pytest tests/test_content_generator.py -v
 - **データベース**: SQLite（永続化）＋ Redis（キャッシュ・重複防止）。Redisは`brew services start redis`等で事前起動が必要
 - **開発ツール設定**: `pyproject.toml`（black line-length=120, isort, mypy）／`.flake8`（max-line-length=120）。どちらもリポジトリにコミット済みの共有設定
 - **NGワード**: `NG_KEYWORDS`環境変数または`ng_keywords.txt`で設定。**設定済み**（約420語、ローカル・本番サーバー（wren）双方に配置済み。`.gitignore`対象の実データのためファイル自体はコミットされない）
-- **TypeSafe (Jev)**: 引用RT候補の二次フィルタ（`nikune/quote_safety.py`）に使用。`TYPESAFE_API_KEY`（`.env`、gitignore対象）が未設定なら判定なしで従来どおり動作。モデルは`TYPESAFE_MODEL`（既定`jev-1.13.0`でバージョン固定）。キーはログ・通知に出さないこと
+- **TypeSafe (Jev)**: 引用RT候補の二次フィルタ（`nikune/quote_safety.py`）と、自分の投稿の投稿直前チェック（`nikune/post_safety.py`、現状は警告ログのみで投稿は止めない。API失敗時もそのまま投稿）に使用。投稿直前チェックの「キャラクターの口調・世界観に沿っているか」は本番ペルソナ`data/persona.tsv`（非公開シートのpersonaタブのエクスポート、gitignore対象）がある場合のみ行う。`TYPESAFE_API_KEY`（`.env`、gitignore対象）が未設定なら判定なしで従来どおり動作。モデルは`TYPESAFE_MODEL`（既定`jev-1.13.0`でバージョン固定）。キーはログ・通知に出さないこと
 
 ## Project Structure
 
@@ -82,6 +82,8 @@ nikune/                        # メインパッケージ
   utils.py                     # 共通ユーティリティ
   jev_checker.py               # TypeSafe (Jev) への問い合わせ共通部分（失敗しても例外を投げない）
   quote_safety.py              # 引用RT候補の安全判定（質問・しきい値・判定ルール）
+  post_safety.py               # 自分の投稿の投稿直前チェック（警告のみ。止めるかどうかはshould_post()で切替）
+  emoji_rules.py               # 通常投稿の絵文字ルール（許可リスト方式: 文頭🐻 1つ＋🥩/🍖合わせて1つまで）
 config/
   settings.py                  # 環境変数管理
 scripts/
@@ -97,11 +99,12 @@ tests/
   test_logging_config.py
   test_main.py
   test_nikune_service_runner.py
+  test_post_safety.py
   test_scheduler.py
   test_twitter_client.py
 data/                          # DB・テンプレートファイル
   category.tsv / tone.tsv / sample_templates.tsv   # マスタデータ（コミット対象）
-  tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / templates.db
+  tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / persona.tsv / templates.db
                                 # 実データ（gitignore対象）。tweet_templates.tsv/*.generated.tsv/templates.dbは
                                 # 非公開Google Sheet「tweet_template」由来。quote_comments.tsvは対応データが
                                 # シート側に未作成のため、実際には常にフォールバックで動作している（詳細は下記参照）
@@ -120,9 +123,9 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 - 基本機能（定期投稿、引用リツイート、DB、スケジューラー、ヘルスチェック）は実装済み
 - 引用リツイートの検出対象を「お肉」から**食・レストラン全般**（寿司・カレー・ラーメン等）に拡張済み
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
-- テスト: `tests/`に10ファイル（auto_quote_retweeter/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
+- テスト: `tests/`に11ファイル（auto_quote_retweeter/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
 - **本番デプロイ済み**: 2026年9月21〜22日に本番サーバー（wren）へデプロイ完了。`--schedule`常駐ではなくcronから`main.py --post-now`/`main.py --quote-check`を直接呼ぶ方式で、独り言ツイート・自動引用RTが稼働中
 - NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
-- 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み
+- 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み。許可リスト方式（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで、それ以外は警告ログのみ）に拡張済み
 - 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装
 - 引用RTコメント文言（`quote_comments.tsv`）の状況は上記「Project Structure」「キャラクターペルソナについて」を参照（非公開シート側に対応データ未作成のため、常にフォールバック文言で動作中）
