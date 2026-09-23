@@ -40,6 +40,14 @@ QUOTE_RETWEET_HIGH_PRIORITY_LIMIT = int(
     os.getenv("QUOTE_RETWEET_HIGH_PRIORITY_LIMIT", "3")
 )  # 高優先度の上限（1時間あたり）
 
+# TypeSafe (Jev) 設定
+# - TYPESAFE_API_KEY が未設定（空文字含む）なら Jev による判定はオフになり、従来どおり動作する
+# - モデルは alias（jev-latest）ではなくバージョン固定を既定にする。alias はリリースのたびに
+#   指す先が変わり、検証済みのしきい値の前提が崩れうるため（公式ドキュメント Models 参照）
+TYPESAFE_API_KEY = (os.getenv("TYPESAFE_API_KEY") or "").strip() or None
+TYPESAFE_MODEL = (os.getenv("TYPESAFE_MODEL") or "").strip() or "jev-1.13.0"
+TYPESAFE_TIMEOUT_SECONDS = float(os.getenv("TYPESAFE_TIMEOUT_SECONDS", "10"))
+
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）
 def _load_ng_keywords() -> list[str]:

@@ -19,6 +19,8 @@ from config.settings import (
 )
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
+from nikune.jev_checker import JevChecker
+from nikune.quote_safety import evaluate_quote_candidate
 from nikune.twitter_client import TwitterClient
 
 # 定数定義
@@ -49,10 +51,19 @@ class AutoQuoteRetweeter:
         - 本格運用では Redis による永続化が推奨されます（上記「重要な制限事項」参照）
     """
 
-    def __init__(self, db_manager: DatabaseManager, dry_run: bool = False) -> None:
-        """自動Quote Retweeterを初期化"""
+    def __init__(
+        self, db_manager: DatabaseManager, dry_run: bool = False, jev_checker: Optional[JevChecker] = None
+    ) -> None:
+        """自動Quote Retweeterを初期化
+
+        Args:
+            jev_checker: 引用前の安全判定に使う Jev クライアント。省略時は設定（TYPESAFE_API_KEY）から生成し、
+                キー未設定なら判定なしで従来どおり動作する。dry_run でもキーがあれば Jev は実際に呼ぶ
+                （読み取りのみ・安価で、ドライランで判定結果を確認できるようにするため）
+        """
         self.db_manager = db_manager
         self.dry_run = dry_run
+        self.jev_checker = jev_checker if jev_checker is not None else JevChecker.from_settings()
         self.twitter_client = TwitterClient(dry_run=dry_run)
         self.content_generator = ContentGenerator(db_manager)
         self.bot_name = BOT_NAME
@@ -131,6 +142,8 @@ class AutoQuoteRetweeter:
                 "food_related_found": 0,
                 "quote_posted": 0,
                 "skipped_rate_limit": 0,
+                "skipped_by_jev": 0,
+                "jev_unavailable": 0,
                 "errors": [],
             }
 
@@ -202,9 +215,24 @@ class AutoQuoteRetweeter:
                             logger.info(f"⏰ High priority rate limit reached, skipping tweet (Score: {score})")
                             continue
 
+                        author_username = getattr(tweet, "author_username", None)
+
+                        # Jev による安全判定（キーワード一致を通過した候補にだけ問い合わせる二次フィルタ）
+                        verdict = evaluate_quote_candidate(self.jev_checker, tweet.id, tweet.text, author_username)
+                        if verdict.decision == "unavailable":
+                            # 判定できない候補は引用しない。一時的な障害で候補を失わないよう処理済みにはしない
+                            results["jev_unavailable"] += 1
+                            continue
+                        if verdict.decision == "skip":
+                            # 判定済みの不適切候補は処理済みにして、同じプロセス内で再問い合わせしない
+                            results["skipped_by_jev"] += 1
+                            with self._processed_tweets_lock:
+                                self.processed_tweets[tweet.id] = datetime.now()
+                            self._cleanup_old_processed_tweets()
+                            continue
+
                         # コメント生成（優先度対応版）
                         comment = self.content_generator.generate_quote_comment(tweet.text)
-                        author_username = getattr(tweet, "author_username", None)
 
                         if self.dry_run:
                             pseudo_url = f"https://x.com/{author_username or 'unknown'}/status/{tweet.id}"
