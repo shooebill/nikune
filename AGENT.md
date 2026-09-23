@@ -132,7 +132,7 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
 - テスト: `tests/`に12ファイル（auto_quote_retweeter/check_logs/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
 - **本番デプロイ済み**: 2026年9月21〜22日に本番サーバー（wren）へデプロイ完了。`--schedule`常駐ではなくcronから`main.py --post-now`/`main.py --quote-check`を直接呼ぶ方式で、独り言ツイート・自動引用RTが稼働中
-- **本番の異常通知**: cron方式では見張り役（`nikune_service_runner.py`）を使わないため、見張り役の通知は本番で一度も送られていなかった。各回の数分後に`scripts/check_logs.py`をcronで起動し、その回のログに異常（成功の記録なし・失敗の記録・TypeSafeでチェックできなかった・キー未設定・Jevの警告）があるときだけSlackへ通知する方式にした（通知部品は`nikune/notifications.py`に共通化）。LINEは`LINE_NOTIFY_ENABLED=false`のままオフ。**wrenへのcrontab追加と実送信の確認は未完了**
+- **本番の異常通知**: cron方式では見張り役（`nikune_service_runner.py`）を使わないため、見張り役の通知は本番で一度も送られていなかった。各回の数分後に`scripts/check_logs.py`をcronで起動し、その回のログに異常（成功の記録なし・失敗の記録・TypeSafeでチェックできなかった・キー未設定・Jevの警告）があるときだけSlackへ通知する方式にした（通知部品は`nikune/notifications.py`に共通化）。LINEは`LINE_NOTIFY_ENABLED=false`のままオフ。2026-09-23にwrenへ反映し、各回の5分後（9:05/12:35/15:05/19:05）にcronで稼働中（結果は`/mnt/data/nikune/logs/check.log`）。テスト用ログでのSlack実送信と、本番の回での通知（Jevの警告）を確認済み
 - NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
 - 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み。許可リスト方式（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで、それ以外は警告ログのみ）に拡張済み
 - 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装
