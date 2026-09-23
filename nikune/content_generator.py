@@ -14,6 +14,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
 from .database import DatabaseManager
+from .emoji_rules import SIGNATURE_EMOJI, find_emoji_rule_violations
 from .twitter_client import _safe_text_length
 
 # ログ設定
@@ -151,9 +152,9 @@ class ContentGenerator:
     QUOTE_COMMENTS_FILE = "data/quote_comments.tsv"
 
     # 通常投稿の絵文字ルール（docs/CHARACTER_PERSONA_SAMPLE.md「絵文字の使用ルール」）
-    # 署名: 🐻 を文頭に1つ置く。装飾目的の絵文字は使わない（検出時は警告ログのみで自動削除はしない）
-    SIGNATURE_EMOJI = "🐻"
-    PROHIBITED_DECORATIVE_EMOJIS = ("✨", "😍", "🤤", "😋", "🔥", "💕", "🌟", "😊", "🤗", "💖")
+    # 署名: 🐻 を文頭に1つ置く。それ以外に許可するのは 🥩/🍖 を合わせて1つまで（許可リスト方式、
+    # 判定は nikune/emoji_rules.py）。違反は警告ログのみで自動削除はしない
+    SIGNATURE_EMOJI = SIGNATURE_EMOJI
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
@@ -526,7 +527,8 @@ class ContentGenerator:
         通常投稿に絵文字ルールを適用する
 
         文頭が🐻でなければ署名として付与する（テンプレート側の書き忘れを防ぐ）。
-        禁止の装飾絵文字が含まれていた場合は警告ログを出す。自動削除はしない
+        その上で、許可リスト（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで）の外にある絵文字、
+        2つ目以降の🐻、2つ以上の肉系絵文字があれば警告ログを出す。自動削除はしない
         （テンプレート＝スプレッドシート側の誤りに気づけるようにするため）。
 
         Args:
@@ -535,13 +537,13 @@ class ContentGenerator:
         Returns:
             署名が文頭にあるツイート内容
         """
-        found = [emoji for emoji in self.PROHIBITED_DECORATIVE_EMOJIS if emoji in content]
-        if found:
-            logger.warning(f"⚠️ 装飾絵文字を含むテンプレートです（ペルソナ違反）: {''.join(found)}")
+        signed = content if content.startswith(self.SIGNATURE_EMOJI) else f"{self.SIGNATURE_EMOJI} {content}"
 
-        if content.startswith(self.SIGNATURE_EMOJI):
-            return content
-        return f"{self.SIGNATURE_EMOJI} {content}"
+        violations = find_emoji_rule_violations(signed)
+        if violations:
+            logger.warning(f"⚠️ 絵文字ルール違反のテンプレートです（ペルソナ違反）: {' / '.join(violations)}")
+
+        return signed
 
     def _add_dynamic_elements(self, template: str) -> str:
         """

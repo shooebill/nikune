@@ -30,6 +30,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import main  # noqa: E402
+from nikune.content_generator import GeneratedTweetContent  # noqa: E402
+from nikune.post_safety import PostSafetyVerdict  # noqa: E402
 
 
 def _make_db_manager_context(
@@ -198,3 +200,34 @@ class MainArgparseScheduleDryRunTests(TestCase):
 
         self.assertEqual(exit_ctx.exception.code, 0)
         mocked_start.assert_called_once_with(config_file=None, dry_run=False)
+
+
+class PostNowCommandDryRunPrePostCheckTests(TestCase):
+    """--post-now --dry-run でも投稿直前チェック（Jev）は実行し、Xへの投稿はしない"""
+
+    def test_dry_run_template_post_runs_pre_post_check(self) -> None:
+        manager_cls, scheduler = _make_scheduler_manager_mock()
+        scheduler.content_generator.generate_tweet_content.return_value = GeneratedTweetContent(
+            text="テスト", template_id=3
+        )
+        scheduler.run_pre_post_check.return_value = PostSafetyVerdict(decision="warn", reasons=["x"])
+
+        with mock.patch.object(main, "SchedulerManager", manager_cls):
+            with mock.patch.object(main, "setup_sample_data", return_value=True):
+                result = main.post_now_command(dry_run=True)
+
+        self.assertTrue(result)
+        scheduler.run_pre_post_check.assert_called_once_with("テスト", route="post_now(dry-run)", template_id=3)
+        scheduler.post_now.assert_not_called()
+        scheduler.content_generator.record_tweet_usage.assert_not_called()
+
+    def test_dry_run_custom_text_runs_pre_post_check(self) -> None:
+        manager_cls, scheduler = _make_scheduler_manager_mock()
+        scheduler.run_pre_post_check.return_value = None  # チェック自体が動かなくても止めない
+
+        with mock.patch.object(main, "SchedulerManager", manager_cls):
+            result = main.post_now_command(text="テスト", dry_run=True)
+
+        self.assertTrue(result)
+        scheduler.run_pre_post_check.assert_called_once_with("テスト", route="custom(dry-run)")
+        scheduler.post_custom_tweet.assert_not_called()

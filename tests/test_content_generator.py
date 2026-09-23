@@ -186,22 +186,46 @@ class TweetSignatureEnforcementTests(TestCase):
         with self.assertLogs("nikune.content_generator", level="WARNING") as captured:
             result = self.generator._apply_signature("🐻 テスト ✨")
         self.assertEqual(result, "🐻 テスト ✨")
-        self.assertTrue(any("装飾絵文字" in message for message in captured.output))
+        self.assertTrue(any("絵文字ルール違反" in message for message in captured.output))
 
     def test_clean_template_logs_no_warning(self) -> None:
         with self.assertNoLogs("nikune.content_generator", level="WARNING"):
             self.generator._apply_signature("🐻 テスト 🥩")
 
+    def test_allowed_emoji_patterns_log_no_warning(self) -> None:
+        # 許可範囲: 文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで。★♪→ のような記号は絵文字ではない
+        for text in ("テスト", "🐻 テスト", "テスト 🍖", "🐻 テスト🥩 テスト", "🐻 テスト★♪→", "  テスト"):
+            with self.subTest(text=text):
+                with self.assertNoLogs("nikune.content_generator", level="WARNING"):
+                    self.generator._apply_signature(text)
+
+    def test_emoji_outside_allowlist_logs_warning(self) -> None:
+        # 旧禁止リストにない絵文字（天気・ハート・肌色つき・ZWJ結合・国旗・キーキャップ）も検出する
+        for emoji in FORBIDDEN_DECORATIVE_EMOJI + ["☀️", "❤", "👍🏽", "🐻‍❄️", "🇯🇵", "1️⃣", "🍣"]:
+            with self.subTest(emoji=emoji):
+                with self.assertLogs("nikune.content_generator", level="WARNING") as captured:
+                    result = self.generator._apply_signature(f"🐻 テスト{emoji}")
+                self.assertEqual(result, f"🐻 テスト{emoji}")  # 自動削除はしない
+                self.assertTrue(any("許可外の絵文字" in message for message in captured.output))
+
+    def test_second_signature_logs_warning(self) -> None:
+        for text in ("🐻 テスト 🐻", "テスト 🐻"):  # 後者は文頭に署名が付与されて🐻が2つになる
+            with self.subTest(text=text):
+                with self.assertLogs("nikune.content_generator", level="WARNING") as captured:
+                    self.generator._apply_signature(text)
+                self.assertTrue(any("2つ目以降の🐻" in message for message in captured.output))
+
+    def test_two_meat_emojis_log_warning(self) -> None:
+        for text in ("🐻 テスト 🥩🍖", "🐻 🥩 テスト 🥩"):
+            with self.subTest(text=text):
+                with self.assertLogs("nikune.content_generator", level="WARNING") as captured:
+                    result = self.generator._apply_signature(text)
+                self.assertEqual(result, text)
+                self.assertTrue(any("肉系絵文字が2個" in message for message in captured.output))
+
     def test_process_template_applies_signature(self) -> None:
         processed = self.generator._process_template({"id": "1", "template": "テスト"})
         self.assertEqual(processed, "🐻 テスト")
-
-    def test_prohibited_list_covers_persona_forbidden_emoji(self) -> None:
-        # テスト側の禁止リストのうち、コード側に無いものが増えていないこと（👑はペルソナ文書外のため除外）
-        missing = [
-            e for e in FORBIDDEN_DECORATIVE_EMOJI if e != "👑" and e not in self.generator.PROHIBITED_DECORATIVE_EMOJIS
-        ]
-        self.assertEqual(missing, [])
 
 
 class TweetContentGenerationCooldownTests(TestCase):

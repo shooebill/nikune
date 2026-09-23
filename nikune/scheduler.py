@@ -16,6 +16,8 @@ from config.settings import BOT_NAME
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
+from nikune.jev_checker import JevChecker
+from nikune.post_safety import PostSafetyVerdict, evaluate_post, should_post
 from nikune.twitter_client import TwitterClient
 from nikune.utils import log_errors
 
@@ -36,6 +38,7 @@ class SchedulerManager:
         content_generator: Optional[ContentGenerator] = None,
         twitter_client: Optional[TwitterClient] = None,
         dry_run: bool = False,
+        jev_checker: Optional[JevChecker] = None,
     ):
         """
         スケジューラーマネージャーを初期化
@@ -45,12 +48,15 @@ class SchedulerManager:
             content_generator: コンテンツジェネレーター（Noneの場合は新規作成）
             twitter_client: Twitterクライアント（Noneの場合は新規作成）
             dry_run: ドライランモード（実際の投稿を行わない）
+            jev_checker: 投稿直前チェック・引用RT候補の判定に使う Jev クライアント。省略時は設定
+                （TYPESAFE_API_KEY）から生成し、キー未設定なら判定なしで従来どおり動作する
         """
         self.dry_run = dry_run
+        self.jev_checker = jev_checker if jev_checker is not None else JevChecker.from_settings()
         self.db_manager = db_manager or DatabaseManager()
         self.content_generator = content_generator or ContentGenerator(self.db_manager)
         self.twitter_client = twitter_client or TwitterClient(dry_run=dry_run)
-        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager, dry_run=dry_run)
+        self.auto_quote_retweeter = AutoQuoteRetweeter(self.db_manager, dry_run=dry_run, jev_checker=self.jev_checker)
 
         self.is_running = False
         self.scheduler_thread: Optional[threading.Thread] = None
@@ -153,6 +159,10 @@ class SchedulerManager:
                 logger.warning("⚠️ No tweet content generated, skipping post")
                 return
 
+            # 投稿直前チェック（現状は警告のみで止めない）
+            if not self.pre_post_check(generated.text, route="scheduled", template_id=generated.template_id):
+                return
+
             # ツイート投稿
             tweet_id = self.twitter_client.post_tweet(generated.text)
 
@@ -166,6 +176,37 @@ class SchedulerManager:
 
         except Exception as e:
             logger.error(f"❌ Scheduled post failed: {e}")
+
+    def run_pre_post_check(
+        self, text: str, route: str, template_id: Optional[int] = None
+    ) -> Optional[PostSafetyVerdict]:
+        """
+        投稿直前チェック（Jev）を実行して判定結果を返す。どんな失敗でも例外を投げない
+
+        ドライラン（main.py --post-now --dry-run）でも、判定の確認のためにこのメソッドは呼ばれる。
+
+        Returns:
+            判定結果。想定外のエラーで判定処理自体が動かなかった場合は None
+        """
+        try:
+            return evaluate_post(self.jev_checker, text, route=route, template_id=template_id)
+        except Exception as e:  # noqa: BLE001 - チェックの失敗で投稿処理・cron を止めない
+            logger.warning(f"⚠️ Pre-post check could not run (posting without the check): {type(e).__name__}")
+            return None
+
+    def pre_post_check(self, text: str, route: str, template_id: Optional[int] = None) -> bool:
+        """
+        3つの投稿経路（_scheduled_post / post_now / post_custom_tweet）の共通の投稿直前チェック
+
+        Returns:
+            投稿してよいか。現状の方針（警告のみ）では常に True。
+            「止める」運用への切り替えは nikune/post_safety.py の should_post()（BLOCK_ON_WARN）で行う
+        """
+        verdict = self.run_pre_post_check(text, route=route, template_id=template_id)
+        if verdict is None or should_post(verdict):
+            return True
+        logger.warning(f"🚫 Post blocked by the pre-post check: route={route} template={template_id}")
+        return False
 
     def _daily_maintenance(self) -> None:
         """日次メンテナンス処理"""
@@ -307,6 +348,10 @@ class SchedulerManager:
                 logger.warning("⚠️ No tweet content generated")
                 return False
 
+            # 投稿直前チェック（現状は警告のみで止めない）
+            if not self.pre_post_check(generated.text, route="post_now", template_id=generated.template_id):
+                return False
+
             # ツイート投稿
             tweet_id = self.twitter_client.post_tweet(generated.text)
 
@@ -341,6 +386,10 @@ class SchedulerManager:
             if len(text) > 280:
                 logger.warning(f"Tweet too long ({len(text)} chars), truncating...")
                 text = text[:277] + "..."
+
+            # 投稿直前チェック（現状は警告のみで止めない）
+            if not self.pre_post_check(text, route="custom"):
+                return False
 
             # ツイート投稿
             success = self.twitter_client.post_tweet(text)
