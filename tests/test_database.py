@@ -130,3 +130,30 @@ class RecordTweetUsageTtlTests(TestCase):
         ]
         self.assertEqual(len(history_calls), 1)
         self.assertEqual(history_calls[0].args[1], 2 * 3600)
+
+
+class QuoteHistoryTests(TestCase):
+    """引用RT履歴（quote_history）が実行をまたいだ重複防止・レート制限に使えることの確認"""
+
+    def test_record_and_lookup_quote(self) -> None:
+        from datetime import datetime, timedelta
+
+        db = _make_db_manager_without_connections()
+        now = datetime(2026, 9, 27, 12, 30, 4)
+        db.record_quote("111", "999", 3, now)
+
+        self.assertTrue(db.has_quoted("111"))
+        self.assertFalse(db.has_quoted("222"))
+        self.assertEqual(db.get_quotes_since(now - timedelta(hours=1)), [{"quoted_at": now, "priority_score": 3}])
+        self.assertEqual(db.get_quotes_since(now), [])
+
+    def test_clear_all_templates_keeps_quote_history(self) -> None:
+        from datetime import datetime
+
+        db = _make_db_manager_without_connections()
+        db.redis_client = cast(Any, FakeRedisClient([]))
+        db.record_quote("111", "999", 3, datetime(2026, 9, 27, 12, 30))
+
+        db.clear_all_templates()
+
+        self.assertTrue(db.has_quoted("111"))

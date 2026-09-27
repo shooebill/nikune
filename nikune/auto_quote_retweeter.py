@@ -43,12 +43,11 @@ class AutoQuoteRetweeter:
     フォロー中ユーザーの食関連（お肉＋食・レストラン全般）ツイートを自動検出し、
     ペルソナに沿ったコメント付きで引用リツイートする機能を提供します。
 
-    重要な制限事項:
-        - 処理済みツイートの追跡はメモリ内のOrderedDictで管理されており、
-          アプリケーション再起動後は履歴が失われます
-        - そのため、再起動直後は過去に処理済みのツイートを重複して
-          Quote Retweetする可能性があります
-        - 本格運用では Redis による永続化が推奨されます（上記「重要な制限事項」参照）
+    引用RTの履歴:
+        - 本番はcronで毎回別プロセスとして起動するため、メモリ上の状態は実行ごとに失われる
+        - そのため投稿した引用RTはSQLiteの quote_history に記録し、実行のたびに読み込んで
+          「同じツイートを再度引用しない」「実行をまたいでもレート制限を守る」ようにしている
+        - メモリ上の processed_tweets は、Jevでスキップした候補など同じプロセス内での再評価を防ぐためのもの
     """
 
     def __init__(
@@ -68,9 +67,9 @@ class AutoQuoteRetweeter:
         self.content_generator = ContentGenerator(db_manager)
         self.bot_name = BOT_NAME
 
-        # 処理済みツイートを追跡（重複防止）
+        # 処理済みツイートを追跡（同じプロセス内での重複防止）
         # OrderedDictで順序保持とO(1)検索を両立、サイズ管理も自動化
-        # 永続化についてはクラスdocstringの「重要な制限事項」を参照
+        # 実行をまたいだ重複防止はクラスdocstringの「引用RTの履歴」を参照
         self.processed_tweets: OrderedDict[str, datetime] = OrderedDict()
         self._processed_tweets_lock = threading.Lock()  # スレッドセーフティ確保
 
@@ -147,7 +146,8 @@ class AutoQuoteRetweeter:
                 "errors": [],
             }
 
-            # レート制限チェック
+            # 前回までの実行で投稿した引用RTをレート制限の状態に反映してからチェックする
+            self._restore_rate_limit_state()
             if not self._can_quote_now():
                 logger.info("⏰ Rate limit: skipping quote retweet check")
                 results["skipped_rate_limit"] = 1
@@ -179,6 +179,12 @@ class AutoQuoteRetweeter:
             # 各ツイートをチェック
             skipped_processed = 0
             for tweet in timeline_tweets:
+                # 投稿するたびにレート制限を確認する（以前は実行開始時に1回確認するだけで、
+                # HIGH優先度の候補が続くと1回の実行で上限を超えて投稿していた）
+                if not self._can_quote_now():
+                    logger.info("⏰ Rate limit reached, stopping further quotes in this run")
+                    break
+
                 try:
                     # 既に処理済みかチェック（OrderedDictでO(1)検索・スレッドセーフ）
                     with self._processed_tweets_lock:
@@ -186,6 +192,12 @@ class AutoQuoteRetweeter:
                             skipped_processed += 1
                             logger.debug(f"⏭️ Already processed tweet: {tweet.id}")
                             continue
+
+                    # 過去の実行で引用RTしたツイートは除外（実行をまたいだ重複防止）
+                    if self.db_manager.has_quoted(str(tweet.id)):
+                        skipped_processed += 1
+                        logger.debug(f"⏭️ Already quoted in a previous run: {tweet.id}")
+                        continue
 
                     # 自分のツイートは除外
                     if self._is_own_tweet(tweet):
@@ -251,6 +263,7 @@ class AutoQuoteRetweeter:
                                     self.high_priority_quotes_in_hour.append(self.last_quote_time)
 
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
+                                self.db_manager.record_quote(str(tweet.id), str(quote_id), score, self.last_quote_time)
 
                         # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録・スレッドセーフ）
                         with self._processed_tweets_lock:
@@ -290,6 +303,23 @@ class AutoQuoteRetweeter:
             error_msg = f"Error in check_and_quote_tweets: {e}"
             logger.error(f"❌ {error_msg}")
             return {"success": False, "error": error_msg}
+
+    def _restore_rate_limit_state(self) -> None:
+        """DBの引用RT履歴から、直近の投稿をレート制限の状態（最終投稿時刻・1時間内の投稿）に反映する"""
+        window = timedelta(minutes=max(60, self.min_interval_minutes))
+        for quote in self.db_manager.get_quotes_since(datetime.now() - window):
+            quoted_at = quote["quoted_at"]
+            if self.last_quote_time is None or quoted_at > self.last_quote_time:
+                self.last_quote_time = quoted_at
+            if quoted_at not in self.quotes_in_last_hour:
+                self.quotes_in_last_hour.append(quoted_at)
+            if (
+                quote["priority_score"] >= self.high_priority_score
+                and quoted_at not in self.high_priority_quotes_in_hour
+            ):
+                self.high_priority_quotes_in_hour.append(quoted_at)
+        self.quotes_in_last_hour.sort()
+        self.high_priority_quotes_in_hour.sort()
 
     def _can_quote_now(self) -> bool:
         """現在Quote Tweetが可能かどうかチェック"""
@@ -482,6 +512,7 @@ class AutoQuoteRetweeter:
 
     def get_status(self) -> Dict[str, Any]:
         """現在のステータス情報を取得"""
+        self._restore_rate_limit_state()
         can_quote = self._can_quote_now()
 
         next_available = None
