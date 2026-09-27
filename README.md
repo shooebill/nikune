@@ -1,49 +1,33 @@
-# 🐻 Nikune Twitter Bot
+# nikune
 
-お肉が大好きなキャラクター「nikune」が、お肉のおいしさを自動投稿するTwitterボット
+お肉が大好きなキャラクター「nikune」として、X（旧Twitter）に独り言を定期投稿し、フォロー中の人の食べ物の投稿にコメントを付けて引用する bot。
 
 [![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## ✨ 概要
+本番で運用している。デプロイの時期や既知の未対応事項は [`AGENT.md`](AGENT.md) の「Development Status」にまとめている。
 
-- **性格**: お肉に偏愛を持つキャラクター。丁寧語を使わず、断定的な口調が特徴
-- **機能**: 定期ツイート投稿、フォロー中ユーザーの食関連ツイートへの自動引用リツイート、重複防止、動的コンテンツ生成
-- **開発状況**: 本番運用中。デプロイ時期・既知の未対応事項など詳細な開発状況は[`AGENT.md`](AGENT.md)の「Development Status」を参照
+キャラクターの人格と口調のサンプルは [`docs/CHARACTER_PERSONA_SAMPLE.md`](docs/CHARACTER_PERSONA_SAMPLE.md) にある。コードは特定のペルソナに縛られていない。`data/` に置くテンプレート、引用コメント、ペルソナの TSV を差し替えれば、別のキャラクターでも動く。
 
-キャラクターの人格・口調のサンプルは [`docs/CHARACTER_PERSONA_SAMPLE.md`](docs/CHARACTER_PERSONA_SAMPLE.md) を参照。このコードベースは特定のペルソナに固定されているわけではなく、任意のペルソナ定義に差し替えて動かせる設計を想定している。
+## できること
 
-### 🚀 主な機能
+- テンプレートから独り言を選んで投稿する。同じテンプレートが続かないよう、Redis で直近の使用を記録している
+- タイムラインと検索から食べ物の投稿（お肉と、寿司・カレー・ラーメンなど食・レストラン全般）を見つけ、キーワードに合わせたコメントを付けて引用する
+- 引用は1日1回までの抽選にできる。朝・昼・晩に起動して回ごとの確率を変えると、引用する時間帯がばらける
+- 引用候補は TypeSafe の Jev で安全かどうかを判定し、事故や炎上に絡む投稿を避ける。自分の投稿も投稿直前に Jev でチェックする（現状は警告のログを出すだけで、投稿は止めない）
+- ドライランで、投稿や API 呼び出しをせずに動きを確かめられる
+- cron で動かす場合はログを確認するスクリプトが、常駐させる場合はサービスラッパーが、異常のときだけ Slack（任意で LINE）に通知する
 
-- ✅ **定期ツイート投稿**: スケジューラーによる自動投稿（`--schedule`モード使用時のコードデフォルトは 09:00 / 13:30 / 19:00。実際の投稿時刻はデプロイ方式・運用設定により異なる。詳細は下記「使用方法」および[`AGENT.md`](AGENT.md)を参照）
-- ✅ **自動引用リツイート**: フォロー中ユーザーの食関連ツイート（お肉＋食・レストラン全般）を検出し、優先度に応じてコメント付きで引用リツイート
-- ✅ **重複防止**: Redisキャッシュ＋処理済みID追跡によるテンプレート・ツイートの重複回避
-- ✅ **動的コンテンツ**: 時間・挨拶の自動挿入
-- ✅ **カテゴリ・トーン管理**: 柔軟なテンプレート分類
-- ✅ **ドライランモード**: 実際の投稿・API呼び出しを行わない安全なテスト実行
-- ✅ **自動起動・監視**: cron運用時はログ確認スクリプトで異常時のみSlack/LINE通知。launchd/systemd常駐時は異常終了時の自動再起動と通知
-- ✅ **クロスプラットフォーム対応**: Windows/Mac/Linux対応
+## セットアップ
 
-## 🛠️ セットアップ
-
-### 📋 前提条件
-
-- **Python 3.13以上**（`uv`が自動管理するため個別インストール不要）
-- **[uv](https://docs.astral.sh/uv/)**（パッケージ・仮想環境管理）
-- **Redis Server**（必須：重複防止機能とシステム安定性に必要）
-- **Twitter API v2** アクセス権限
-
-### 1. 🐍 環境準備
+必要なのは [uv](https://docs.astral.sh/uv/)、Redis、X API v2 のアクセス権である。Python 3.13 は uv が用意するので、別に入れなくてよい。
 
 ```bash
-# uvが依存関係と仮想環境を自動的に用意する（手動activate不要）
 uv sync
 ```
 
-### 2. 🔗 Redis セットアップ（必須）
-
-> ⚠️ **重要**: Redisはシステム動作に必須です。接続できない場合、アプリケーションは起動しません。
+Redis は重複防止に使っていて、つながらないと起動しない。
 
 ```bash
 # macOS (Homebrew)
@@ -58,11 +42,9 @@ sudo systemctl start redis-server
 docker run -d -p 6379:6379 redis:alpine
 ```
 
-接続確認: `redis-cli ping` → `PONG` が返ればOK
+`redis-cli ping` で `PONG` が返れば動いている。
 
-### 3. 🔑 環境変数の設定
-
-`.env` ファイルをプロジェクトルートに作成する（`.gitignore`対象、リポジトリにはコミットしない）：
+プロジェクトルートに `.env` を作る。`.gitignore` の対象なので、リポジトリには入らない。
 
 ```env
 # Twitter API v2 設定
@@ -91,127 +73,108 @@ NG_KEYWORDS=
 # LINE_NOTIFY_ENABLED=false
 ```
 
-### 4. 🗄️ データベースの初期化
+最後に動作を確かめ、サンプルのテンプレートでデータベースを作る。
 
 ```bash
-# 全システムテスト（推奨：環境確認）
 uv run python main.py --test
-
-# サンプルデータでデータベースを初期化
 uv run python main.py --setup-db --file data/sample_templates.tsv
-```
-
-### ⚡ クイックスタート（ドライラン確認）
-
-```bash
-uv sync
-brew services start redis   # 環境に応じたRedis起動方法を使用
-uv run python main.py --test
 uv run python main.py --post-now --dry-run
 uv run python main.py --quote-check --dry-run
 ```
 
-## 🎮 使用方法
+開発は macOS、本番は Linux で動かしている。Windows では WSL2 の上で Redis を使う。改行コードは `.gitattributes` で LF にそろえている。
+
+## 使い方
 
 ```bash
-# 🧪 全システムテスト（推奨：最初に実行）
+# 全コンポーネントのテストと、ヘルスチェック
 uv run python main.py --test
-
-# 💚 システムヘルスチェック
 uv run python main.py --health
 
-# 🐻 即座に1回ツイート投稿
+# 独り言を1回投稿する
 uv run python main.py --post-now
 uv run python main.py --post-now --category お肉
 uv run python main.py --post-now --text "カスタムテキスト"
 uv run python main.py --post-now --dry-run
 
-# 🍽️ 食関連ツイート（お肉＋食・レストラン全般）をチェックして引用リツイート
+# 食べ物の投稿を探して引用する
 uv run python main.py --quote-check
 uv run python main.py --quote-check --dry-run
+uv run python main.py --quote-check --chance 0.5   # 今日まだ引用していなければ、50%の確率で探す
 
-# ⏰ スケジューラーを開始（`--schedule`モードのコードデフォルト：09:00/13:30/19:00 投稿、10:30/15:00/21:00 引用チェック）
-# 注意: これはコード（--scheduleモード使用時）のデフォルト値。実際のデプロイでは`--schedule`常駐ではなく
-# cron等から`--post-now`/`--quote-check`を直接呼ぶ運用も可能で、その場合の時刻は運用パラメータとして
-# 別途設定される（本番の具体的な運用方法・時刻は[`AGENT.md`](AGENT.md)を参照）
+# スケジューラーを常駐させる
 uv run python main.py --schedule
 
-# 📥 テンプレートインポート
+# テンプレートを取り込む
 uv run python main.py --setup-db --file data/your_templates.tsv
 ```
 
+`--schedule` で常駐させたときの時刻はコードの既定値で、投稿が 09:00 / 13:30 / 19:00、引用のチェックが 10:30 / 15:00 / 21:00 である。本番は常駐させず、cron から `--post-now` と `--quote-check` を直接呼んでいる。その時刻は [`AGENT.md`](AGENT.md) に書いてある。
+
+`--chance` を付けると、1日1回までの抽選になる。今日すでに引用していれば何もせず、まだなら指定した確率でだけ候補を探す。朝・昼・晩の3回起動するなら、確率を 0.25 / 0.3333 / 0.5 にすると、朝・昼・晩・引用なしがそれぞれ25%になる。
+
 ## データファイル
 
-### リポジトリに含まれるファイル（マスタ・サンプルのみ）
+このリポジトリは公開しているので、未公開のツイート文言やキャラクターの具体的なセリフはコミットしない。実データは非公開のスプレッドシート「tweet_template」で管理し、TSV に書き出して `data/` に置く。
 
-- `data/sample_templates.tsv` — サンプルテンプレート
-- `data/category.tsv` — カテゴリマスタデータ
-- `data/tone.tsv` — トーンマスタデータ
+リポジトリに入っているのは、マスタとサンプルだけである。
 
-### 実データファイル（`.gitignore`対象）
+- `data/sample_templates.tsv`（サンプルのテンプレート）
+- `data/category.tsv`（カテゴリのマスタ）
+- `data/tone.tsv`（トーンのマスタ）
 
-このリポジトリはPUBLICであり、未公開のツイート候補文言・キャラクターの具体的なセリフは一切コミットしない方針。実データは非公開スプレッドシート「tweet_template」で管理し、以下はそのエクスポート：
+次のファイルは `.gitignore` の対象になっている。
 
-- `data/templates.db` — SQLiteデータベース
-- `data/tweet_templates.tsv` — 手入力テンプレート
-- `data/tweet_templates.generated.tsv` — AI生成テンプレート（ドラフト）
-- `data/exported_templates.tsv` — `export_templates_to_tsv()`（`nikune/database.py`）使用時にのみ生成される任意のエクスポート先。通常の運用フローでは生成されない
+- `data/templates.db`（SQLite のデータベース。テンプレートと引用の履歴を持つ）
+- `data/tweet_templates.tsv`（手で書いたテンプレート）
+- `data/tweet_templates.generated.tsv`（AI で生成したテンプレートの下書き）
+- `data/quote_comments.tsv`（引用するときのコメント文言。スプレッドシートの quote_comments タブから書き出す。ないときはコードの最小限の文言を使う）
+- `data/persona.tsv`（投稿直前チェックで口調を照らし合わせるペルソナ）
+- `data/exported_templates.tsv`（`nikune/database.py` の `export_templates_to_tsv()` を使ったときだけできる。普段の運用では作られない）
 
-以下は上記スプレッドシート由来ではなく、`bucket`/`keyword`/`text`形式で管理する想定の別ファイル。対応データはスプレッドシート側にまだ作成されていないため、通常はファイルが存在せず最小限のフォールバックで動作する：
+テンプレートを足すときは、スプレッドシートで書いて `data/*.tsv` に書き出し、`uv run python main.py --setup-db` でデータベースを更新する。カテゴリとトーンを増やすときは `data/category.tsv` と `data/tone.tsv` を直接編集する。
 
-- `data/quote_comments.tsv` — 引用リツイート時のコメント文言
-
-## 📁 プロジェクト構造
+## プロジェクト構造
 
 ```
 nikune/
-├── 📄 main.py                        # メインエントリーポイント（CLI）
-├── 📁 config/
-│   └── settings.py                   # 環境変数管理
-├── 📁 nikune/
-│   ├── content_generator.py          # 🎨 ツイート/引用コメント生成、食関連キーワード検出
-│   ├── auto_quote_retweeter.py       # 🔄 自動引用リツイート
-│   ├── database.py                   # 🗄️ SQLite + Redis管理
-│   ├── scheduler.py                  # ⏰ 自動投稿スケジューラー
-│   ├── twitter_client.py             # 🐦 Twitter API v2クライアント
-│   ├── health_check.py               # 💚 システムヘルスチェック
-│   ├── notifications.py              # 🔔 Slack/LINE通知の共通部品
-│   └── utils.py                      # 共通ユーティリティ
-├── 📁 scripts/
-│   ├── check_logs.py                 # cron運用時のログ確認（異常時のみ通知）
-│   └── nikune_service_runner.py      # 常駐運用時の自動起動ラッパー（異常終了時に通知）
-├── 📁 docs/
-│   └── CHARACTER_PERSONA_SAMPLE.md   # キャラクターペルソナのサンプル
-├── 📁 tests/
-│   ├── test_auto_quote_retweeter.py
-│   ├── test_check_logs.py
-│   ├── test_content_generator.py
-│   ├── test_database.py
-│   ├── test_health_check.py
-│   ├── test_logging_config.py
-│   ├── test_main.py
-│   ├── test_nikune_service_runner.py
-│   ├── test_scheduler.py
-│   └── test_twitter_client.py
-├── 📁 data/                          # マスタ・サンプル（実データはgitignore対象）
-├── ⚙️ pyproject.toml                  # 依存関係・Black/isort/mypy/pytest設定
-├── 🔧 .flake8                        # コード品質設定
-├── ✅ check_code.sh                   # 品質チェック一括実行（black/isort/flake8/mypy/pytest）
-├── 🎯 .gitattributes                  # Git属性（LF統一）
-├── 🚫 .gitignore
-├── 📄 THIRD_PARTY_LICENSES.md         # NGワード辞書として利用するOSSのライセンス表記
-└── 🐍 .python-version
+├── main.py                        # CLI のエントリーポイント
+├── config/
+│   └── settings.py                # 環境変数の管理
+├── nikune/
+│   ├── content_generator.py       # 独り言と引用コメントの生成、食べ物キーワードの検出
+│   ├── auto_quote_retweeter.py    # 自動引用（レート制限と引用履歴）
+│   ├── database.py                # SQLite と Redis の管理
+│   ├── scheduler.py               # 常駐時のスケジューラー
+│   ├── twitter_client.py          # X API v2 のクライアント
+│   ├── jev_checker.py             # TypeSafe (Jev) への問い合わせ
+│   ├── quote_safety.py            # 引用候補の安全判定
+│   ├── post_safety.py             # 自分の投稿の投稿直前チェック
+│   ├── emoji_rules.py             # 独り言の絵文字ルール
+│   ├── health_check.py            # ヘルスチェック
+│   ├── notifications.py           # Slack と LINE の通知
+│   └── utils.py
+├── scripts/
+│   ├── check_logs.py              # cron 運用時のログ確認（異常のときだけ通知）
+│   └── nikune_service_runner.py   # 常駐運用時の自動起動ラッパー
+├── docs/
+│   └── CHARACTER_PERSONA_SAMPLE.md
+├── tests/                         # pytest
+├── data/                          # マスタとサンプル（実データは .gitignore の対象）
+├── pyproject.toml                 # 依存関係と black / isort / mypy / pytest の設定
+├── .flake8
+├── check_code.sh                  # 品質チェックの一括実行
+└── THIRD_PARTY_LICENSES.md        # NGワード辞書に使った OSS のライセンス表記
 ```
 
-## 💻 開発環境
+## 開発
 
-### 🔧 コード品質チェック
+品質チェックは `./check_code.sh` でまとめて走る。black、isort、flake8、mypy、mypy --strict、pytest の順に実行する。
 
 ```bash
-# 一括実行（black → isort → flake8 → mypy → mypy --strict → pytest）
 ./check_code.sh
 
-# 個別実行
+# 個別に実行する場合
 uv run black .
 uv run isort .
 uv run flake8 nikune/ main.py config/ tests/
@@ -220,131 +183,79 @@ uv run mypy --strict .
 uv run pytest tests/
 ```
 
-設定ファイル: `pyproject.toml`（Black line-length=120, isort, mypy, pytest）、`.flake8`（120文字制限）。両方リポジトリにコミット済みの共有設定。
+設定は `pyproject.toml`（black の行長 120、isort、mypy、pytest）と `.flake8`（120文字）にあり、どちらもコミットしてある。
 
-### 🌍 クロスプラットフォーム対応
+### NGワード
 
-- ✅ **Windows**: WSL2 + Redis対応
-- ✅ **macOS**: Homebrew + Redis対応
-- ✅ **Linux**: 直接Redis使用
-- ✅ **改行コード**: LF統一（`.gitattributes`）
+NGワードは、引用候補の投稿本文を弾くために使う。独り言の投稿には使わない。判定の処理は `nikune/content_generator.py` の `get_food_keyword_score()` にある。
 
-### テンプレート・カテゴリの追加
+入れるのは、単語だけで不適切と言い切れるもの（性的な表現、差別語、暴言）と、事件や事故や暴力、自傷に関わる語である。スパムや詐欺の定番の語や、ヴィーガンと肉食の論争のように対立を招きやすい話題の語も入れる。「部落」「屠殺」のように日常語や歴史の語と重なるものは、食べ物の投稿まで弾いてしまうおそれが大きいので、安易に足さない。
 
-1. 実データは非公開スプレッドシートで起草・管理し、`data/*.tsv`としてエクスポートする
-2. `uv run python main.py --setup-db` でデータベースを更新
-3. カテゴリ・トーンのマスタ拡張は `data/category.tsv` / `data/tone.tsv` を編集
+変えるときは、プロジェクトルートの `ng_keywords.txt`（`.gitignore` の対象）を直接編集する。1行に1語で、`#` で始まる行はコメントになる。公開されている OSS の辞書を取り込むならライセンスを確かめ、[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) に出典を書き足す。そのあと `uv run python main.py --quote-check --dry-run` で、実際の候補を誤って弾いていないか確かめる。
 
-### 🚫 NGワードの選定基準・変更手順
+## トラブルシューティング
 
-- 対象: 引用リツイート候補ツイート本文のフィルタリング（定期投稿には使われない。詳細は
-  `nikune/content_generator.py` の `get_food_keyword_score()` を参照）
-- 選定基準の目安:
-  - 性的表現・差別語・暴言など、単語自体が不適切と断定できるもの
-  - 事件・事故・暴力関連のセンシティブな話題
-  - スパム・出会い系・詐欺の定番ワード
-  - 政治・宗教的に対立を招きやすい話題（ヴィーガン/肉食論争など）
-  - 自傷・自殺関連のセンシティブなワード
-  - 「部落」「屠殺」等、日常語・歴史語と重なり食・レストラン関連ツイートを誤って弾く
-    リスクが高い語は慎重に検討し、安易に追加しない
-- 変更手順:
-  1. `ng_keywords.txt`（プロジェクトルート、`.gitignore`対象の実データ）を直接編集する。
-     1行1ワード、`#`で始まる行はコメント
-  2. 公開されているOSSのNGワード辞書を取り込む場合はライセンス条件を確認し、
-     [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) に出典・ライセンス表記を追記する
-  3. `uv run python main.py --quote-check --dry-run` で実際の候補ツイートに対して
-     誤検出がないか確認しながら調整する
+Redis につながらないときは、起動しているかを確かめる。
 
-## 🔧 トラブルシューティング
-
-#### Redis接続エラー
 ```bash
 redis-cli ping   # PONGが返らない場合は起動していない
 brew services start redis        # macOS
 sudo systemctl start redis-server # Linux
 ```
 
-#### Twitter API認証エラー
-- `.env`ファイルの設定を確認
-- Twitter Developer Portalでトークンを再生成
+X API の認証で失敗するときは、`.env` の値を見直し、それでも駄目なら Developer Portal でトークンを作り直す。
 
-#### NGワード未設定の警告
-- `⚠️ NGワードリストが見つかりませんでした` はドライラン時は無害だが、**本番投稿を開始する前に`NG_KEYWORDS`または`ng_keywords.txt`を必ず設定する**
-- `ng_keywords.txt`は`.gitignore`対象（実データのため非公開）。公開されているOSSのNGワード辞書を参考にする場合は[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)のライセンス表記を確認すること
+`⚠️ NGワードリストが見つかりませんでした` という警告は、ドライランでは害がない。本番で投稿を始める前には、`NG_KEYWORDS` か `ng_keywords.txt` を必ず設定する。
 
-#### 依存関係エラー
+依存関係でエラーが出たら、ロックファイルどおりに入れ直す。
+
 ```bash
 uv sync --frozen
 ```
 
-## 🤝 コントリビューション
+## 通知と自動起動
 
-1. このリポジトリをフォーク
-2. 機能ブランチを作成: `git checkout -b feature/amazing-feature`
-3. コード品質チェック: `./check_code.sh`
-4. 変更をコミット: `git commit -m 'feat: add amazing feature'`
-5. ブランチをプッシュ: `git push origin feature/amazing-feature`
-6. Pull Requestを作成
+### Slack と LINE
 
-### 📝 コミット規約
+Slack に通知するには、Incoming Webhook の URL を `SLACK_WEBHOOK_URL` に入れる。`SLACK_WEBHOOK_USERNAME` と `SLACK_WEBHOOK_ICON_EMOJI` も使える。URL を設定しなければ、Slack には何も送らない。
 
-- `feat:` 新機能
-- `fix:` バグ修正
-- `chore:` 雑務・設定変更
-- `docs:` ドキュメント更新
+LINE は Messaging API の broadcast で、友だち登録した全員に送る。`userId` や `groupId` を登録する必要はない。チャネルアクセストークンを `LINE_CHANNEL_ACCESS_TOKEN` に入れ、`LINE_NOTIFY_ENABLED=true` にしたときだけ送る（既定は `false`）。運用を始めた直後は Slack だけで通知し、見る頻度が落ちてきたら LINE も有効にするつもりでいる。
 
-## 📄 ライセンス
+### cron で動かす場合
 
-MIT License - 詳細は [LICENSE](LICENSE) ファイルを参照
+cron から `main.py --post-now` や `--quote-check` を1回ずつ起動するなら、サービスラッパーは使わない。代わりに、各回の数分後に `scripts/check_logs.py` を起動してその回のログを確かめ、異常があるときだけ通知する。正常なら何も送らない。
 
-## ⚠️ 注意事項
+```bash
+uv run python scripts/check_logs.py <post|quote> <予定時刻HH:MM>
+```
 
-- 🔒 このリポジトリは**PUBLIC**。未公開のツイート候補文言・キャラクターの具体的なセリフはコミットしない（実データファイル・`.env`は`.gitignore`対象）
-- 🐦 Twitter API利用規約を遵守してください
-- 🔧 本番投稿を開始する前に、`NG_KEYWORDS`の設定を必ず確認すること
+読むログは `--log-file` で指定できる。既定は `$NIKUNE_LOG_DIR/post.log` と `quote.log` で、`NIKUNE_LOG_DIR` の既定は `/mnt/data/nikune/logs` である。`--dry-run` を付けると、通知を送らずに通知文を表示する。
 
-## 🛡️ 自動起動と監視
+通知するのは次のときである。
 
-### 1. Slack 通知の準備
-- Slack の Incoming Webhook URL を取得し、環境変数 `SLACK_WEBHOOK_URL` に設定（任意で `SLACK_WEBHOOK_USERNAME`, `SLACK_WEBHOOK_ICON_EMOJI` も使用可）
-- 通知が不要な場合は設定不要（Webhook が未設定なら Slack 通知は送信されません）
+- その回に成功の記録がない（cron が動かなかったときや、起動してすぐ落ちたときも含む）
+- 失敗の記録（`❌` の失敗メッセージ、`ERROR` 行、`Traceback`）がある
+- TypeSafe でチェックできなかった（`UNCHECKED`、`UNAVAILABLE`）
+- 投稿直前チェックで API キーが設定されていなかった（`DISABLED`）
+- Jev が警告を出した（`WARN`）
 
-### 2. LINE 通知の準備（任意）
-- LINE Developers で Messaging API を構築し、チャネルアクセストークンを取得
-- `.env` などに `LINE_CHANNEL_ACCESS_TOKEN` を保存
-- 友だち登録した全員に配信する broadcast 方式のため、`userId` や `groupId` の個別登録は不要
-- `LINE_NOTIFY_ENABLED=true` を設定して初めて有効化される（既定は `false`）。運用開始直後は
-  Slackのみで通知し、監視頻度が下がった段階でLINE通知も有効化する運用を想定
-- `LINE_CHANNEL_ACCESS_TOKEN` 未設定、または `LINE_NOTIFY_ENABLED` が `false`（既定）の場合は
-  LINE 通知は送信されません
+`WARNING` の行を一律に通知することはしない。毎回出る既知の警告があるからである。通知文に入れるログ行は、Webhook の URL、トークン、API キーらしきものを伏せ字にしてから送る。
 
-### 3. cron 運用でのログ確認・通知
-cron から `main.py --post-now` / `--quote-check` を1回ずつ起動する運用では、サービスラッパーは使わないため、
-代わりに `scripts/check_logs.py` を各回の数分後に起動してログを確認します。異常があるときだけ通知し、正常なら何も送りません。
-
-- 使い方: `uv run python scripts/check_logs.py <post|quote> <予定時刻HH:MM>`（例: `post 09:00`）
-  - `--log-file` で読むログを指定（既定は `$NIKUNE_LOG_DIR/post.log`・`quote.log`、`NIKUNE_LOG_DIR` の既定は `/mnt/data/nikune/logs`）
-  - `--dry-run` で通知を送らず通知文を表示
-- 通知する条件: その回に成功の記録がない（cron が動かなかった・起動時に落ちた場合も含む）／失敗の記録（`❌` の失敗メッセージ・`ERROR` 行・`Traceback`）がある／
-  TypeSafe でチェックできなかった（`UNCHECKED`・`UNAVAILABLE`）／投稿直前チェックでキー未設定（`DISABLED`）／Jev の警告（`WARN`）
-- レベルが `WARNING` の行を一律に通知することはしない（毎回出る既知の警告があるため）
-- 通知文のログ行は、Webhook URL・トークン・API キーらしきものを伏せ字にしてから送る
-- crontab の例（予定時刻の5分後に確認）:
+crontab には、予定時刻の5分後に確認する行を足す。
 
 ```
 5 9 * * * cd $HOME/nikune && $HOME/.local/bin/uv run --no-sync python scripts/check_logs.py post 09:00 >> /path/to/logs/check.log 2>&1
 ```
 
-### 4. サービスラッパーの利用（常駐運用の場合）
-- `uv run python scripts/nikune_service_runner.py` でスケジューラーが常駐起動します
-- 既定では `main.py --schedule` を実行し、異常終了時に 5 秒待って自動再起動します
-- 主な環境変数
-  - `NIKUNE_SERVICE_COMMAND`: 実行コマンドを上書きしたい場合（例: `"uv run python main.py --schedule"`）
-  - `NIKUNE_RESTART_DELAY`: 再起動までの待機秒数（既定: 5）
-  - `NIKUNE_MAX_RESTARTS`: 再起動上限を設定したい場合
+### 常駐させる場合
 
-### 5. macOS (launchd) で常駐起動
-1. `~/Library/LaunchAgents/com.nikune.bot.plist` を作成し、以下の内容を保存
+`uv run python scripts/nikune_service_runner.py` でスケジューラーを常駐させる。既定では `main.py --schedule` を実行し、異常終了したら5秒待って起動し直す。動きは次の環境変数で変えられる。
+
+- `NIKUNE_SERVICE_COMMAND`（実行するコマンド。例 `"uv run python main.py --schedule"`）
+- `NIKUNE_RESTART_DELAY`（起動し直すまでの秒数。既定は 5）
+- `NIKUNE_MAX_RESTARTS`（起動し直す回数の上限）
+
+macOS では launchd で常駐させる。`~/Library/LaunchAgents/com.nikune.bot.plist` に次の内容を保存する。
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -376,12 +287,9 @@ cron から `main.py --post-now` / `--quote-check` を1回ずつ起動する運�
 </plist>
 ```
 
-2. ログ用ディレクトリが未作成なら `mkdir -p /path/to/nikune/logs`
-3. `launchctl load ~/Library/LaunchAgents/com.nikune.bot.plist`
-4. 停止・再起動は `launchctl unload` / `launchctl kickstart` で実施
+ログのディレクトリがなければ `mkdir -p /path/to/nikune/logs` で作り、`launchctl load ~/Library/LaunchAgents/com.nikune.bot.plist` で読み込む。止めるときは `launchctl unload`、起動し直すときは `launchctl kickstart` を使う。
 
-### 6. Linux (systemd) への転用（参考）
-- `/etc/systemd/system/nikune.service` の例
+Linux では systemd に転用できる。`/etc/systemd/system/nikune.service` の例を載せておく。
 
 ```ini
 [Unit]
@@ -400,5 +308,14 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-- `sudo systemctl daemon-reload && sudo systemctl enable --now nikune.service` で有効化
-- 詳細な監視条件や通知拡張は Slack 通知を基点に追加実装可能
+`sudo systemctl daemon-reload && sudo systemctl enable --now nikune.service` で有効にする。
+
+## コントリビューション
+
+フォークして機能ブランチ（例 `feature/amazing-feature`）を作り、`./check_code.sh` が通ることを確かめてから Pull Request を出してほしい。コミットメッセージは `feat:`（新機能）、`fix:`（バグ修正）、`docs:`（ドキュメント）、`chore:`（雑務や設定）で始める。
+
+X の利用規約は守ること。
+
+## ライセンス
+
+MIT License。詳しくは [LICENSE](LICENSE) を参照。
