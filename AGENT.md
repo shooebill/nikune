@@ -114,8 +114,8 @@ data/                          # DB・テンプレートファイル
   category.tsv / tone.tsv / sample_templates.tsv   # マスタデータ（コミット対象）
   tweet_templates.tsv / *.generated.tsv / quote_comments.tsv / persona.tsv / templates.db
                                 # 実データ（gitignore対象）。tweet_templates.tsv/*.generated.tsv/templates.dbは
-                                # 非公開Google Sheet「tweet_template」由来。quote_comments.tsvは対応データが
-                                # シート側に未作成のため、実際には常にフォールバックで動作している（詳細は下記参照）
+                                # 非公開Google Sheet「tweet_template」由来（quote_comments.tsvは
+                                # quote_commentsタブ。詳細は下記参照）
 main.py                        # CLIエントリーポイント
 check_code.sh                  # 品質チェック一括実行スクリプト
 ```
@@ -124,7 +124,9 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 
 `docs/CHARACTER_PERSONA_SAMPLE.md`はこのコードベースが特定のペルソナに固定されていないことを示す**サンプル**。実際に稼働中のnikuneの本番ペルソナ・ツイート候補文言は、非公開のGoogle Sheet「tweet_template」（`persona`/`tweet_templates`/`category`/`tone`タブ）で管理している。
 
-`data/quote_comments.tsv`（gitignore対象）は、引用RTのコメント文言を`bucket`/`keyword`/`text`形式で管理する想定のファイルだが、対応するデータは非公開シート側にまだ作成されていない（2026年9月時点、該当タブ自体が存在しない）。そのためこのファイルは常に見つからず、コード側のフォールバック文言（公開済みの口癖のみを使った最小限の文言）で動作している。将来、`persona`タブの内容をもとに`bucket`/`keyword`/`text`形式のデータを新規に起草すれば、このファイルとして配置できる。
+`data/quote_comments.tsv`（gitignore対象）は、引用RTのコメント文言を`bucket`/`keyword`/`text`形式で持つファイル。実データは非公開シートの`quote_comments`タブ（2026-09-27に`persona`タブをもとに新規起草）で、TSVに書き出してローカル・wrenの`data/`に配置する。ファイルがない環境では、コード側のフォールバック文言（公開済みの口癖のみを使った最小限の文言）で動作する。
+
+文言を書くときは、コードが分かるのは「本文にキーワードの文字列が含まれている」ことだけだと意識する。料理の中身・見た目・お酒の有無などは判定していないので、分からないことは言い切らず「・・・？」の形にする（例: 具材の有無を言い当てるセリフは避ける）。キーワードは部分一致なので、「そば」が「駅のそばで」に当たるような誤検出もありうる。
 
 ## Development Status（2026-09-23時点）
 
@@ -137,4 +139,4 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 - NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
 - 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み。許可リスト方式（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで、それ以外は警告ログのみ）に拡張済み
 - 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装
-- 引用RTコメント文言（`quote_comments.tsv`）の状況は上記「Project Structure」「キャラクターペルソナについて」を参照（非公開シート側に対応データ未作成のため、常にフォールバック文言で動作中）
+- 引用RTコメント文言（`quote_comments.tsv`）は2026-09-27に非公開シートの`quote_comments`タブとして作成し、ローカル・wrenに配置済み（詳細は上記「キャラクターペルソナについて」参照）
