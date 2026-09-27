@@ -112,6 +112,19 @@ class DatabaseManager:
         """
         )
 
+        # 引用RTの履歴テーブル（cronで毎回別プロセスとして起動しても、同じツイートを再度引用しないため・
+        # 実行をまたいでレート制限を効かせるために使う。--setup-db でも消さない）
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quote_history (
+                source_tweet_id TEXT PRIMARY KEY,
+                quote_tweet_id TEXT NOT NULL,
+                priority_score INTEGER NOT NULL,
+                quoted_at TEXT NOT NULL
+            )
+        """
+        )
+
         self.sqlite_conn.commit()
         logger.info("✅ SQLite tables created")
 
@@ -208,6 +221,51 @@ class DatabaseManager:
 
         logger.info(f"🎲 Random template selected: ID={template['id']}, Category={template['category']}")
         return template
+
+    # ===== 引用RT履歴（SQLite） =====
+
+    def record_quote(self, source_tweet_id: str, quote_tweet_id: str, priority_score: int, quoted_at: datetime) -> None:
+        """
+        引用RTした記録を保存する
+
+        Args:
+            source_tweet_id: 引用元ツイートのID
+            quote_tweet_id: 投稿した引用RTのID
+            priority_score: 引用元ツイートの優先度スコア
+            quoted_at: 投稿時刻（ローカル時刻）
+        """
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO quote_history (source_tweet_id, quote_tweet_id, priority_score, quoted_at)
+            VALUES (?, ?, ?, ?)
+        """,
+            (str(source_tweet_id), str(quote_tweet_id), priority_score, quoted_at.isoformat()),
+        )
+        self.sqlite_conn.commit()
+
+    def has_quoted(self, source_tweet_id: str) -> bool:
+        """引用元ツイートを過去に引用RTしたことがあるか"""
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("SELECT 1 FROM quote_history WHERE source_tweet_id = ?", (str(source_tweet_id),))
+        return cursor.fetchone() is not None
+
+    def get_quotes_since(self, since: datetime) -> List[Dict[str, Any]]:
+        """
+        指定時刻以降の引用RTを古い順に取得する
+
+        Returns:
+            {"quoted_at": datetime, "priority_score": int} のリスト
+        """
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute(
+            "SELECT quoted_at, priority_score FROM quote_history WHERE quoted_at > ? ORDER BY quoted_at",
+            (since.isoformat(),),
+        )
+        return [
+            {"quoted_at": datetime.fromisoformat(row["quoted_at"]), "priority_score": int(row["priority_score"])}
+            for row in cursor.fetchall()
+        ]
 
     # ===== 動的データ管理（Redis） =====
 

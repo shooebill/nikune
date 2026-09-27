@@ -8,9 +8,17 @@ from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decid
 from nikune.twitter_client import TwitterClient
 
 
+def _make_db_mock() -> mock.MagicMock:
+    # 引用RT履歴は空（過去に引用したツイートなし）として扱う
+    db = mock.MagicMock()
+    db.has_quoted.return_value = False
+    db.get_quotes_since.return_value = []
+    return db
+
+
 def _make_retweeter() -> AutoQuoteRetweeter:
     # DB接続（Redis/SQLite）・Twitter API認証はdry_run=Trueで不要になる
-    return AutoQuoteRetweeter(db_manager=mock.MagicMock(), dry_run=True)
+    return AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
 
 
 class FoodKeywordWiringTests(TestCase):
@@ -163,7 +171,7 @@ class JevQuoteSafetyTests(TestCase):
 
     def _run(self, client: mock.MagicMock) -> tuple[AutoQuoteRetweeter, Dict[str, Any], mock.MagicMock]:
         retweeter = AutoQuoteRetweeter(
-            db_manager=mock.MagicMock(), dry_run=True, jev_checker=JevChecker(api_key="fake", client=client)
+            db_manager=_make_db_mock(), dry_run=True, jev_checker=JevChecker(api_key="fake", client=client)
         )
         with (
             mock.patch.object(retweeter, "_get_mock_timeline", return_value=[FOOD_TWEET]),
@@ -235,7 +243,7 @@ class JevQuoteSafetyTests(TestCase):
         self.assertNotIn(FOOD_TWEET.id, retweeter.processed_tweets)
 
     def test_missing_key_behaves_as_before(self) -> None:
-        retweeter = AutoQuoteRetweeter(db_manager=mock.MagicMock(), dry_run=True)
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
         self.assertFalse(retweeter.jev_checker.enabled)
 
         with (
@@ -261,3 +269,58 @@ class QuoteSafetyRuleTests(TestCase):
 
     def test_decide_accepts_clear_safe_values(self) -> None:
         self.assertEqual(decide(SAFE_NOULS), [])
+
+
+def _food_tweet(tweet_id: str, text: str) -> SimpleNamespace:
+    return SimpleNamespace(id=tweet_id, text=text, author_id="u", author_username="u", created_at="")
+
+
+class CrossRunRateLimitTests(TestCase):
+    """cronで毎回別プロセスとして起動しても、上限を超えて・同じツイートを引用しないことの確認
+    （2026-09-27 12:30、HIGH優先度の候補が続いて1回の実行で3件投稿した不具合の回帰テスト）"""
+
+    def _run_live(
+        self, db: mock.MagicMock, tweets: list[SimpleNamespace]
+    ) -> tuple[AutoQuoteRetweeter, Dict[str, Any], mock.MagicMock]:
+        retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
+        retweeter.dry_run = False  # 投稿はモックに差し替えて本番経路を通す
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=tweets),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return retweeter, results, post
+
+    def test_consecutive_high_priority_candidates_post_only_once(self) -> None:
+        db = _make_db_mock()
+        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた"), _food_tweet("t3", "ラーメン")]
+
+        _, results, post = self._run_live(db, tweets)
+
+        self.assertEqual(results["quote_posted"], 1)
+        post.assert_called_once()
+        db.record_quote.assert_called_once()
+        self.assertEqual(db.record_quote.call_args.args[:2], ("t1", "q1"))
+
+    def test_tweet_quoted_in_previous_run_is_skipped(self) -> None:
+        db = _make_db_mock()
+        db.has_quoted.side_effect = lambda tweet_id: tweet_id == "t1"
+        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた")]
+
+        _, results, post = self._run_live(db, tweets)
+
+        self.assertEqual(results["quote_posted"], 1)
+        self.assertEqual(post.call_args.args[0], "t2")
+
+    def test_recent_quote_in_previous_run_blocks_this_run(self) -> None:
+        from datetime import datetime, timedelta
+
+        db = _make_db_mock()
+        db.get_quotes_since.return_value = [{"quoted_at": datetime.now() - timedelta(minutes=10), "priority_score": 3}]
+
+        retweeter, results, post = self._run_live(db, [_food_tweet("t1", "焼肉たべた")])
+
+        self.assertEqual(results["skipped_rate_limit"], 1)
+        post.assert_not_called()
+        self.assertIsNotNone(retweeter.last_quote_time)
