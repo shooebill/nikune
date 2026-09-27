@@ -7,9 +7,11 @@ Nikune Twitter Bot - メインエントリーポイント
 
 import argparse
 import logging
+import random
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from config.settings import BOT_NAME
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
@@ -351,12 +353,19 @@ def import_templates_command(file_path: Optional[str] = None) -> bool:
         return False
 
 
-def check_quote_retweet_command(dry_run: bool = False) -> bool:
+def check_quote_retweet_command(
+    dry_run: bool = False, chance: Optional[float] = None, roll: Callable[[], float] = random.random
+) -> bool:
     """
     Quote Retweet チェック・実行コマンド
 
     Args:
         dry_run: True の場合、実際には投稿せずにログ出力のみ
+        chance: 指定すると「1日1回までの抽選」モードになる。今日すでに引用RTしていれば何もせず、
+            まだなら chance の確率でだけ引用RTを探す。1日に何回か起動し、回ごとに確率を変えて
+            時刻をばらけさせるための設定（例: 朝0.25・昼0.3333・晩0.5 で、朝・昼・晩・引用なしが各25%）。
+            省略時は抽選せず毎回探す
+        roll: 抽選に使う乱数（0以上1未満）。テスト用
 
     Returns:
         実行成功かどうか
@@ -371,6 +380,18 @@ def check_quote_retweet_command(dry_run: bool = False) -> bool:
             # ステータス表示
             status = retweeter.get_status()
             logger.info(f"📊 Quote retweeter status: {status}")
+
+            # 1日1回までの抽選（外れ・今日引用済みはエラーではないのでTrueを返す）
+            if chance is not None:
+                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                if db_manager.get_quotes_since(today_start):
+                    logger.info("📅 Already quoted today, skipping this run")
+                    return True
+                value = roll()
+                if value >= chance:
+                    logger.info(f"🎲 Lottery: not this time (roll={value:.2f}, chance={chance:.2f})")
+                    return True
+                logger.info(f"🎲 Lottery: won (roll={value:.2f}, chance={chance:.2f})")
 
             # レート制限チェック
             if not status["can_quote_now"]:
@@ -456,6 +477,7 @@ def main() -> None:
   python main.py --post-now --text "テスト" --dry-run # カスタムテキストのドライラン
   python main.py --quote-check              # 食関連ツイート（お肉＋食・レストラン）をチェック・Quote Retweet
   python main.py --quote-check --dry-run    # Quote Retweetのドライラン
+  python main.py --quote-check --chance 0.5 # 今日未引用なら50%の確率で引用RT（1日1回まで）
   python main.py --schedule                # スケジューラー開始
   python main.py --schedule --dry-run      # スケジューラーのドライラン（投稿・引用RTとも実行せずリハーサル）
   python main.py --setup-db                # データベースセットアップ（自動テンプレートインポート）
@@ -485,9 +507,16 @@ def main() -> None:
         action="store_true",
         help="実際の投稿は行わず、内容のみ表示（--post-now / --quote-check / --schedule用）",
     )
+    parser.add_argument(
+        "--chance",
+        type=float,
+        help="1日1回までの抽選モード（--quote-check用）。今日未引用なら、この確率（0〜1）でだけ引用RTを探す",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="詳細ログを出力")
 
     args = parser.parse_args()
+    if args.chance is not None and not 0 < args.chance <= 1:
+        parser.error("--chance は 0 より大きく 1 以下で指定してください")
 
     # ログ設定
     configure_logging(verbose=args.verbose)
@@ -511,7 +540,7 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
         elif args.quote_check:
-            success = check_quote_retweet_command(dry_run=args.dry_run)
+            success = check_quote_retweet_command(dry_run=args.dry_run, chance=args.chance)
         elif args.schedule:
             success = start_scheduler_command(config_file=args.config, dry_run=args.dry_run)
         elif args.setup_db:
