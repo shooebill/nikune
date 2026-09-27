@@ -231,3 +231,62 @@ class PostNowCommandDryRunPrePostCheckTests(TestCase):
         self.assertTrue(result)
         scheduler.run_pre_post_check.assert_called_once_with("テスト", route="custom(dry-run)")
         scheduler.post_custom_tweet.assert_not_called()
+
+
+class QuoteCheckLotteryTests(TestCase):
+    """--quote-check --chance（1日1回までの抽選モード）の確認"""
+
+    def _run(self, chance: Optional[float], roll: float, quoted_today: bool) -> mock.MagicMock:
+        db = mock.MagicMock()
+        db.get_quotes_since.return_value = [{"quoted_at": None, "priority_score": 3}] if quoted_today else []
+        db_cls = mock.MagicMock()
+        db_cls.return_value.__enter__.return_value = db
+        retweeter = mock.MagicMock()
+        retweeter.get_status.return_value = {"can_quote_now": True, "next_available_time": None}
+        retweeter.check_and_quote_tweets.return_value = {
+            "success": True,
+            "checked_tweets": 0,
+            "food_related_found": 0,
+            "quote_posted": 0,
+        }
+        with (
+            mock.patch.object(main, "DatabaseManager", db_cls),
+            mock.patch.object(main, "AutoQuoteRetweeter", return_value=retweeter),
+        ):
+            self.assertTrue(main.check_quote_retweet_command(chance=chance, roll=lambda: roll))
+        return retweeter
+
+    def test_without_chance_always_searches(self) -> None:
+        retweeter = self._run(chance=None, roll=0.99, quoted_today=True)
+        retweeter.check_and_quote_tweets.assert_called_once()
+
+    def test_won_lottery_searches(self) -> None:
+        retweeter = self._run(chance=0.25, roll=0.1, quoted_today=False)
+        retweeter.check_and_quote_tweets.assert_called_once()
+
+    def test_lost_lottery_skips(self) -> None:
+        retweeter = self._run(chance=0.25, roll=0.25, quoted_today=False)
+        retweeter.check_and_quote_tweets.assert_not_called()
+
+    def test_already_quoted_today_skips_even_if_won(self) -> None:
+        retweeter = self._run(chance=1.0, roll=0.0, quoted_today=True)
+        retweeter.check_and_quote_tweets.assert_not_called()
+
+    def test_chance_flag_is_passed_and_validated(self) -> None:
+        with (
+            mock.patch.object(sys, "argv", ["main.py", "--quote-check", "--chance", "0.5"]),
+            mock.patch.object(main, "configure_logging"),
+            mock.patch.object(main, "check_quote_retweet_command", return_value=True) as command,
+            self.assertRaises(SystemExit),
+        ):
+            main.main()
+        command.assert_called_once_with(dry_run=False, chance=0.5)
+
+        with (
+            mock.patch.object(sys, "argv", ["main.py", "--quote-check", "--chance", "0"]),
+            mock.patch.object(main, "configure_logging"),
+            mock.patch("sys.stderr"),
+            self.assertRaises(SystemExit) as exit_ctx,
+        ):
+            main.main()
+        self.assertEqual(exit_ctx.exception.code, 2)

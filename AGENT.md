@@ -22,6 +22,7 @@ uv run python main.py --post-now --category お肉
 # 引用リツイートチェック（お肉＋食・レストラン全般を検出）
 uv run python main.py --quote-check
 uv run python main.py --quote-check --dry-run   # API呼び出しなしのドライラン
+uv run python main.py --quote-check --chance 0.5   # 1日1回までの抽選モード（今日未引用なら50%で引用RTを探す）
 
 # ログ確認（その回に異常があればSlackへ通知。--dry-runで送らずに通知文を表示）
 uv run python scripts/check_logs.py post 09:00
