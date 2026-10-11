@@ -159,7 +159,7 @@ SAFE_NOULS: Dict[str, float] = {SUITABLE_KEY: 0.95, **{key: 0.03 for key in AVOI
 
 FOOD_TWEET = SimpleNamespace(
     id="jev_candidate_1",
-    text="テストのカレーを食べた",
+    text="テストの牛肉を食べた",
     author_id="jev_user_1",
     author_username="jev_user_1",
     created_at="2026-09-23T09:00:00.000Z",
@@ -295,7 +295,7 @@ class CrossRunRateLimitTests(TestCase):
 
     def test_consecutive_high_priority_candidates_post_only_once(self) -> None:
         db = _make_db_mock()
-        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた"), _food_tweet("t3", "ラーメン")]
+        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "ステーキたべた"), _food_tweet("t3", "牛丼")]
 
         _, results, post = _run_live(db, tweets)
 
@@ -307,7 +307,7 @@ class CrossRunRateLimitTests(TestCase):
     def test_tweet_quoted_in_previous_run_is_skipped(self) -> None:
         db = _make_db_mock()
         db.has_quoted.side_effect = lambda tweet_id: tweet_id == "t1"
-        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた")]
+        tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "ステーキたべた")]
 
         _, results, post = _run_live(db, tweets)
 
@@ -340,7 +340,7 @@ class TweetAgeFilterTests(TestCase):
 
     def test_old_tweet_is_skipped_and_fresh_one_is_quoted(self) -> None:
         db = _make_db_mock()
-        tweets = [_tweet_posted("old", "焼肉たべた", hours_ago=9), _tweet_posted("fresh", "ラーメン", hours_ago=1)]
+        tweets = [_tweet_posted("old", "焼肉たべた", hours_ago=9), _tweet_posted("fresh", "牛丼", hours_ago=1)]
 
         _, results, post = _run_live(db, tweets)
 
@@ -375,7 +375,7 @@ class TweetAgeFilterTests(TestCase):
 
     def test_time_phrase_follows_the_tweet_post_time(self) -> None:
         db = _make_db_mock()
-        tweet = _tweet_posted("t1", "ラーメン", hours_ago=1)
+        tweet = _tweet_posted("t1", "牛丼", hours_ago=1)
         retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
         retweeter.dry_run = False
         with (
@@ -386,4 +386,74 @@ class TweetAgeFilterTests(TestCase):
         ):
             retweeter.check_and_quote_tweets()
 
-        self.assertEqual(generate.call_args.args, ("ラーメン", tweet.created_at))
+        self.assertEqual(generate.call_args.args, ("牛丼", tweet.created_at))
+
+
+class MeatFirstSelectionTests(TestCase):
+    """肉の話題を優先し、汎用の文言しか付けられない食べ物は引用しないことの確認
+    （9/28〜10/9の引用10件のうち、肉のキーワードで拾えたのが1件だけだったことへの対応）"""
+
+    def _retweeter_with_dedicated_comment(self, keyword: str) -> AutoQuoteRetweeter:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+        retweeter.dry_run = False
+        retweeter.content_generator._specific_keyword_comments = [(keyword, ["テスト用の専用コメント"])]
+        return retweeter
+
+    def _run(
+        self, retweeter: AutoQuoteRetweeter, timeline: list[SimpleNamespace], search: list[SimpleNamespace]
+    ) -> Any:
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=search),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return results, post
+
+    def test_meat_tweet_is_quoted_even_when_other_food_comes_first(self) -> None:
+        retweeter = self._retweeter_with_dedicated_comment("寿司")
+        timeline = [
+            _food_tweet("sushi", "寿司たべた"),
+            _food_tweet("lunch", "今日のランチ"),
+            _food_tweet("meat", "牛肉"),
+        ]
+
+        results, post = self._run(retweeter, timeline, [])
+
+        self.assertEqual(results["quote_posted"], 1)
+        self.assertEqual(post.call_args.args[0], "meat")
+
+    def test_food_with_dedicated_comment_is_quoted_when_no_meat(self) -> None:
+        retweeter = self._retweeter_with_dedicated_comment("寿司")
+        timeline = [_food_tweet("lunch", "今日のランチ"), _food_tweet("sushi", "寿司たべた")]
+
+        results, post = self._run(retweeter, timeline, [])
+
+        self.assertEqual(post.call_args.args[0], "sushi")
+        self.assertEqual(post.call_args.args[2].count("テスト用の専用コメント"), 1)
+
+    def test_food_without_dedicated_comment_is_not_quoted(self) -> None:
+        retweeter = self._retweeter_with_dedicated_comment("寿司")
+        timeline = [_food_tweet("lunch", "今日のランチ"), _food_tweet("curry", "カレーたべた")]
+
+        results, post = self._run(retweeter, timeline, [])
+
+        self.assertTrue(results["success"])
+        self.assertEqual(results["skipped_no_fitting_comment"], 2)
+        post.assert_not_called()
+
+    def test_timeline_comes_before_search_within_the_same_rank(self) -> None:
+        retweeter = self._retweeter_with_dedicated_comment("寿司")
+        search = [_food_tweet("search_meat", "焼肉たべた")]
+        timeline = [_food_tweet("sushi", "寿司たべた"), _food_tweet("timeline_meat", "牛肉")]
+
+        _, post = self._run(retweeter, timeline, search)
+
+        self.assertEqual(post.call_args.args[0], "timeline_meat")
+
+    def test_cut_names_without_the_meat_character_count_as_meat(self) -> None:
+        retweeter = _make_retweeter()
+        for text in ["牛スジでカレーを作った", "カレーの具に豚タン"]:
+            with self.subTest(text=text):
+                score_info = retweeter.content_generator.get_food_keyword_score(text)
+                self.assertTrue(score_info["is_meat_topic"])
