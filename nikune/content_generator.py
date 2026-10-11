@@ -61,6 +61,16 @@ class ContentGenerator:
                 "バーベキュー",
                 "BBQ",
                 "ローストビーフ",
+                # 部位・肉料理の名前（「肉」の字が入らない肉の話題を拾う。部分一致で別の語に当たる
+                # 「タン」「ハラミ」「カルビ」「ロース」などは入れていない）
+                "牛スジ",
+                "牛すじ",
+                "牛タン",
+                "豚タン",
+                "サーロイン",
+                "角煮",
+                "チャーシュー",
+                "もつ鍋",
             ],
             "priority": 2,
             "description": "一般的なお肉料理・食材",
@@ -914,9 +924,9 @@ class ContentGenerator:
             # 特定キーワードに対する専用コメント（優先度レベルより先に判定する。
             # HIGH優先度キーワードの多くはこちらの対象でもあるため、先に判定しないと
             # 専用コメントが選ばれることがなくなってしまう）
-            for keyword, comments in self._specific_keyword_comments:
-                if keyword in matched_keywords:
-                    return random.choice(comments)
+            dedicated_comments = self._dedicated_quote_comments(matched_keywords)
+            if dedicated_comments:
+                return random.choice(dedicated_comments)
 
             # 高優先度キーワード用の特別なコメント
             if priority_level == "HIGH":
@@ -932,6 +942,21 @@ class ContentGenerator:
         except Exception as e:
             logger.error(f"❌ Error selecting comment by priority: {e}")
             return random.choice(self._default_quote_comments)
+
+    def _dedicated_quote_comments(self, matched_keywords: List[str]) -> List[str]:
+        """マッチしたキーワードに対する専用コメント（なければ空リスト）"""
+        for keyword, comments in self._specific_keyword_comments:
+            if keyword in matched_keywords:
+                return comments
+        return []
+
+    def has_dedicated_quote_comment(self, matched_keywords: List[str]) -> bool:
+        """マッチしたキーワードのどれかに専用コメントがあるか
+
+        専用コメントがない食べ物には汎用の文言（「肉ね！」など）しか付けられない。
+        肉の話題でなければ的外れになるので、引用するかどうかの判断に使う。
+        """
+        return bool(self._dedicated_quote_comments(matched_keywords))
 
     def _get_time_based_comment(self, current_hour: int, priority_score: int) -> str:
         """時間帯と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）"""

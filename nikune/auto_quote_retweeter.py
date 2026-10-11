@@ -145,6 +145,7 @@ class AutoQuoteRetweeter:
                 "skipped_rate_limit": 0,
                 "skipped_too_old": 0,
                 "skipped_retweet": 0,
+                "skipped_no_fitting_comment": 0,
                 "skipped_by_jev": 0,
                 "jev_unavailable": 0,
                 "errors": [],
@@ -181,6 +182,10 @@ class AutoQuoteRetweeter:
 
             results["checked_tweets"] = len(timeline_tweets)
             logger.info(f"🔍 Checking {len(timeline_tweets)} tweets from timeline")
+
+            # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
+            # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
+            timeline_tweets = self._rank_candidates(timeline_tweets, search_tweet_ids)
 
             # 各ツイートをチェック
             skipped_processed = 0
@@ -235,6 +240,13 @@ class AutoQuoteRetweeter:
                         logger.info(f"🎯 Priority: {priority_level} (Score: {score})")
                         logger.info(f"🔍 Keywords: {keywords}")
                         logger.info(f"💬📝 Content: {tweet.text[:100]}...")
+
+                        # 肉の話題でも、専用コメントのある食べ物でもないものは引用しない
+                        # （「ランチ」等で拾った投稿に汎用の「肉ね！」を付けると的外れになる）
+                        if not self._candidate_tier(score_info) < self.TIER_NOT_QUOTABLE:
+                            results["skipped_no_fitting_comment"] += 1
+                            logger.info("⏭️ Skipping: not a meat topic and no dedicated comment for it")
+                            continue
 
                         # 優先度フィルタリング
                         if score < self.min_priority_score:
@@ -315,6 +327,11 @@ class AutoQuoteRetweeter:
             # 処理結果のサマリーログ
             if skipped_processed > 0:
                 logger.info(f"📊 Skipped {skipped_processed} already processed tweets")
+            if results["skipped_no_fitting_comment"] > 0:
+                logger.info(
+                    f"📊 Skipped {results['skipped_no_fitting_comment']} food tweets "
+                    "that are not about meat and have no dedicated comment"
+                )
             if results["skipped_too_old"] > 0 or results["skipped_retweet"] > 0:
                 logger.info(
                     f"📊 Skipped {results['skipped_too_old']} tweets older than "
@@ -327,6 +344,34 @@ class AutoQuoteRetweeter:
             error_msg = f"Error in check_and_quote_tweets: {e}"
             logger.error(f"❌ {error_msg}")
             return {"success": False, "error": error_msg}
+
+    # 引用候補の優先順（小さいほど先）
+    TIER_MEAT = 0  # 肉の話題
+    TIER_DEDICATED_COMMENT = 1  # 肉ではないが、専用コメントのある食べ物（寿司・餃子など）
+    TIER_NOT_QUOTABLE = 2  # それ以外（引用しない）
+
+    def _candidate_tier(self, score_info: Dict[str, Any]) -> int:
+        """スコア情報から引用候補の優先順を決める"""
+        if not score_info["is_food_related"]:
+            return self.TIER_NOT_QUOTABLE
+        if score_info["is_meat_topic"]:
+            return self.TIER_MEAT
+        if self.content_generator.has_dedicated_quote_comment(score_info["matched_keywords"]):
+            return self.TIER_DEDICATED_COMMENT
+        return self.TIER_NOT_QUOTABLE
+
+    def _rank_candidates(self, tweets: List[Any], search_tweet_ids: set[Any]) -> List[Any]:
+        """引用候補を「肉の話題 → 専用コメントのある食べ物 → それ以外」の順に並べ替える
+
+        同じ順位の中では、フォロー中タイムラインの投稿を検索APIの投稿より先にし、
+        それ以外は元の並び（新しい順）を保つ。
+        """
+
+        def sort_key(tweet: Any) -> tuple[int, bool]:
+            score_info = self.content_generator.get_food_keyword_score(tweet.text)
+            return (self._candidate_tier(score_info), tweet.id in search_tweet_ids)
+
+        return sorted(tweets, key=sort_key)
 
     def _restore_rate_limit_state(self) -> None:
         """DBの引用RT履歴から、直近の投稿をレート制限の状態（最終投稿時刻・1時間内の投稿）に反映する"""
