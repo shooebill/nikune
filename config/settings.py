@@ -33,6 +33,8 @@ ACTIVE_HOURS_END = 21  # 21時まで
 # Quote Retweet設定
 QUOTE_RETWEET_MIN_INTERVAL_MINUTES = int(os.getenv("QUOTE_RETWEET_MIN_INTERVAL_MINUTES", "30"))
 QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
+# 投稿からこの時間を超えたツイートは引用しない（前の晩の投稿に翌朝コメントするのを防ぐ）
+QUOTE_RETWEET_MAX_TWEET_AGE_HOURS = float(os.getenv("QUOTE_RETWEET_MAX_TWEET_AGE_HOURS", "3"))
 
 # 優先度システム設定
 QUOTE_RETWEET_MIN_PRIORITY_SCORE = int(os.getenv("QUOTE_RETWEET_MIN_PRIORITY_SCORE", "1"))  # 最低優先度スコア
