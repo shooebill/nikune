@@ -67,7 +67,8 @@ uv run pytest tests/test_content_generator.py -v
 - **パッケージ管理**: `uv`（pip/venvの代替）。Python 3.13.x
 - **仮想環境**: uvが自動作成・管理（手動activate不要）
 - **Twitter API資格情報**: `.env`（プロジェクトルート、gitignore対象）
-- **主要依存**: tweepy, schedule, requests, python-dotenv, redis。これらは実行時依存として`pyproject.toml`の`[project.dependencies]`に、black/isort/flake8/mypy等の開発ツールは`[dependency-groups].dev`に、すべて明示的にバージョン固定で宣言済み。**`uv sync`だけで**（`.venv`を新規作成した状態からでも）実行・品質チェックに必要な全パッケージが揃う。手動での`uv pip install`や個別のバージョン合わせは不要
+- **主要依存**: tweepy, schedule, requests, python-dotenv, redis, anthropic。これらは実行時依存として`pyproject.toml`の`[project.dependencies]`に、black/isort/flake8/mypy等の開発ツールは`[dependency-groups].dev`に、すべて明示的にバージョン固定で宣言済み。**`uv sync`だけで**（`.venv`を新規作成した状態からでも）実行・品質チェックに必要な全パッケージが揃う。手動での`uv pip install`や個別のバージョン合わせは不要
+- **写真チェック (Claude)**: 引用RT候補に写真が付いていれば1枚目をClaudeに見せ、食べ物の写真か・肉が写っているか・何の料理かを判定する（`nikune/photo_checker.py`。文章は生成させない）。`ANTHROPIC_API_KEY`（`.env`、gitignore対象）が未設定なら写真は見ず、本文だけで従来どおり動作する。API失敗時も本文だけのルールで続行。モデルは`PHOTO_CHECK_MODEL`（既定`claude-opus-5-5`）、1回の実行で見るのは`PHOTO_CHECK_MAX_PER_RUN`件（既定5）まで。キーはログ・通知に出さないこと。実キーでの動作確認は`uv run python scripts/check_photo.py <画像URL>`
 - `requirements.txt`は廃止済み（旧・手動`pip install`用のフリーズ出力で、`pyproject.toml`/`uv.lock`と情報源が重複し乖離の原因になっていたため削除）。本番サーバー（wren）等へのデプロイでpip形式の一覧が必要な場合は、都度`uv export --no-dev --format requirements-txt`等で生成すること（常設ファイルとしては持たない）
 - **データベース**: SQLite（永続化）＋ Redis（キャッシュ・重複防止）。Redisは`brew services start redis`等で事前起動が必要
 - **開発ツール設定**: `pyproject.toml`（black line-length=120, isort, mypy）／`.flake8`（max-line-length=120）。どちらもリポジトリにコミット済みの共有設定
@@ -88,12 +89,14 @@ nikune/                        # メインパッケージ
   jev_checker.py               # TypeSafe (Jev) への問い合わせ共通部分（失敗しても例外を投げない）
   quote_safety.py              # 引用RT候補の安全判定（質問・しきい値・判定ルール）
   post_safety.py               # 自分の投稿の投稿直前チェック（警告のみ。止めるかどうかはshould_post()で切替）
+  photo_checker.py             # 引用RT候補の写真をClaudeに見せて判定（失敗しても例外を投げない）
   emoji_rules.py               # 通常投稿の絵文字ルール（許可リスト方式: 文頭🐻 1つ＋🥩/🍖合わせて1つまで）
   notifications.py             # Slack/LINE通知の共通部品（NotificationManager。全チャネル失敗時はマーカーファイル）
 config/
   settings.py                  # 環境変数管理
 scripts/
   check_logs.py                # cron運用時のログ確認。その回のログを読み、異常時のみ通知（本番はこちら）
+  check_photo.py               # 写真チェックを画像URL1つで試す（実キーでの動作確認用）
   nikune_service_runner.py     # 常駐運用（--schedule）時の自動起動・異常終了時の通知（本番では未使用）
 docs/
   CHARACTER_PERSONA_SAMPLE.md  # キャラクターペルソナのサンプル（本番の正ではない、下記参照）
@@ -107,6 +110,7 @@ tests/
   test_logging_config.py
   test_main.py
   test_nikune_service_runner.py
+  test_photo_checker.py
   test_post_safety.py
   test_scheduler.py
   test_twitter_client.py
@@ -133,12 +137,13 @@ check_code.sh                  # 品質チェック一括実行スクリプト
 - 基本機能（定期投稿、引用リツイート、DB、スケジューラー、ヘルスチェック）は実装済み
 - 引用リツイートの検出対象を「お肉」から**食・レストラン全般**（寿司・カレー・ラーメン等）に拡張済み
 - キャラクターペルソナv1を策定（口調・二人称・感情表現・絵文字ルール等）、コメント生成に反映済み
-- テスト: `tests/`に12ファイル（auto_quote_retweeter/check_logs/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
+- テスト: `tests/`に13ファイル（auto_quote_retweeter/check_logs/content_generator/database/health_check/jev_checker/logging_config/main/nikune_service_runner/photo_checker/post_safety/scheduler/twitter_client）＋`conftest.py`（テスト中は`TYPESAFE_API_KEY`を未設定扱いにして実APIを呼ばない）
 - **本番デプロイ済み**: 2026年9月21〜22日に本番サーバー（wren）へデプロイ完了。`--schedule`常駐ではなくcronから`main.py --post-now`/`main.py --quote-check`を直接呼ぶ方式で、独り言ツイート・自動引用RTが稼働中
 - **本番の異常通知**: cron方式では見張り役（`nikune_service_runner.py`）を使わないため、見張り役の通知は本番で一度も送られていなかった。各回の数分後に`scripts/check_logs.py`をcronで起動し、その回のログに異常（成功の記録なし・失敗の記録・TypeSafeでチェックできなかった・キー未設定・Jevの警告）があるときだけSlackへ通知する方式にした（通知部品は`nikune/notifications.py`に共通化）。LINEは`LINE_NOTIFY_ENABLED=false`のままオフ。2026-09-23にwrenへ反映し、各回の5分後（独り言は9:05/15:05/19:05、引用RTは8:35/12:35/18:35）にcronで稼働中（結果は`/mnt/data/nikune/logs/check.log`）。テスト用ログでのSlack実送信と、本番の回での通知（Jevの警告）を確認済み
 - **引用RTの時刻と回数**: 2026-09-27から、cronで朝・昼・晩（8:30/12:30/18:30）に`--quote-check --chance`を起動し、1日1回までの抽選で引用する（確率0.25/0.3333/0.5で、朝・昼・晩・引用なしが各25%）。引用した記録はSQLiteの`quote_history`に残し、同じツイートの再引用防止と実行をまたいだレート制限に使う（PR #36/#37。それまでは毎日12:30固定で、1回の実行で上限を超えて3件投稿したり、同じツイートを別の日に再度引用したりしていた）
 - **引用RTは新しいツイートだけ**: 投稿から3時間（`QUOTE_RETWEET_MAX_TWEET_AGE_HOURS`）を超えたツイートと、フォロー中の人によるリツイート（本文が`RT @`で始まるもの）は引用しない。時間帯の一言（朝・昼・夜）は起動時刻ではなく元ツイートの投稿時刻で決める（それまでは朝8:30の回が前の晩22〜23時台の投稿を朝のあいさつ付きで引用していた）。候補がタイムライン由来か検索API由来かは`quote.log`の`source=timeline/search`で分かる
 - **引用RTは肉の話題を優先**: 候補を「肉の話題 → 肉ではないが専用コメント（`quote_comments.tsv`の`specific`）のある食べ物 → それ以外」の順に並べ、同じ順位ではフォロー中タイムラインを検索APIより先に見る。専用コメントのない肉以外の投稿（「ランチ」「グルメ」等だけで拾ったもの）は引用しない。`quote_comments.tsv`がない環境では専用コメントがステーキ・焼肉だけなので、実質肉の話題しか引用しない。肉のキーワードには部位・料理名（牛スジ、牛タン、角煮など）も入れている（それまでは新しい順に見て最初の食の投稿を引用しており、9/28〜10/9の引用10件のうち肉のキーワードで拾えたのは1件だった）
+- **引用RTは写真も見る**: 写真付きの候補はClaudeで写真を判定し、候補の順位を「写真に肉が写っている → 本文が肉の話題 → 専用コメントのある食べ物 → それ以外（引用しない）」にする。写真から分かった料理名は本文のキーワードと同じ扱いで、セリフ選びにも使う（本文が店名や日付だけの投稿でも、何の料理かが分かる）。フォロー中タイムラインの投稿は、本文に食のキーワードがなくても写真があれば見る。結果は`quote.log`の`📷 Photo check:`の行に出る
 - NGワード（約420語）は設定済み（ローカル・wren双方に配置。詳細は上記Environment Setup Notes参照）
 - 通常投稿の絵文字ルールはPR #22（署名🐻の文頭保証機能）で対応済み。許可リスト方式（文頭の署名🐻 1つ＋🥩/🍖を合わせて1つまで、それ以外は警告ログのみ）に拡張済み
 - 既知の未対応事項: 季節限定カテゴリ（クリスマス等）の日付フィルタ未実装

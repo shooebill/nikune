@@ -84,3 +84,32 @@ class PostTweetUrlTruncationTests(TestCase):
 
         posted_text = mock_client.create_tweet.call_args.kwargs["text"]
         self.assertEqual(posted_text, text)
+
+
+class WrapTweetsPhotoUrlTests(TestCase):
+    """添付メディアの画像URLが photo_urls に入ることの確認"""
+
+    def test_photo_and_video_thumbnail_urls_are_attached(self) -> None:
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            data=[
+                SimpleNamespace(id=1, text="写真つき", author_id=10, attachments={"media_keys": ["p1", "v1"]}),
+                SimpleNamespace(id=2, text="写真なし", author_id=10, attachments=None),
+            ],
+            includes={
+                "users": [SimpleNamespace(id=10, username="someone")],
+                "media": [
+                    SimpleNamespace(media_key="p1", type="photo", url="https://example.com/p1.jpg"),
+                    SimpleNamespace(
+                        media_key="v1", type="video", url=None, preview_image_url="https://example.com/v1.jpg"
+                    ),
+                ],
+            },
+        )
+
+        with_photo, without_photo = TwitterClient._wrap_tweets_with_author_username(response)
+
+        self.assertEqual(with_photo.photo_urls, ["https://example.com/p1.jpg", "https://example.com/v1.jpg"])
+        self.assertEqual(with_photo.author_username, "someone")
+        self.assertEqual(without_photo.photo_urls, [])

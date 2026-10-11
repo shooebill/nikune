@@ -242,6 +242,20 @@ class ContentGenerator:
         """
         return [kw for v in self._combined_keywords_priority.values() for kw in v["keywords"]]
 
+    # 写真に肉が写っていたときに、本文のキーワードとして足す語
+    PHOTO_MEAT_KEYWORD = "肉"
+
+    @property
+    def photo_dish_keywords(self) -> List[str]:
+        """
+        写真の判定で「何の料理か」の選択肢にするキーワード（肉料理＋専用コメントのある食べ物）
+
+        「肉」「お肉」は料理名ではなく、肉の有無は別に聞くので含めない。
+        """
+        dishes = [kw for kw in self.MEAT_KEYWORDS if kw not in ("肉", "お肉")]
+        dishes += [keyword for keyword, _ in self._specific_keyword_comments]
+        return list(dict.fromkeys(dishes))
+
     def _compile_ng_pattern(self) -> Optional[re.Pattern[str]]:
         """
         NGワードの正規表現パターンを1つにまとめてコンパイル
@@ -783,12 +797,14 @@ class ContentGenerator:
             logger.error(f"❌ Error checking food keywords: {e}")
             return False
 
-    def get_food_keyword_score(self, text: str) -> Dict[str, Any]:
+    def get_food_keyword_score(self, text: str, extra_keywords: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         食関連（お肉＋食・レストラン全般）ツイートの優先度スコアを計算（正規表現最適化版）
 
         Args:
             text (str): 判定対象のツイート本文
+            extra_keywords: 本文以外から分かったキーワード（写真に写っていた料理など）。
+                本文に書かれていたのと同じ扱いでスコアに加える
 
         Returns:
             Dict[str, Any]: スコア情報を含む辞書
@@ -799,6 +815,9 @@ class ContentGenerator:
                 - is_meat_topic: bool - マッチしたキーワードにお肉語彙が含まれるか（絵文字ルール判定用）
         """
         try:
+            if extra_keywords:
+                text = text + "\n" + " ".join(extra_keywords)
+
             # NGワードチェック（事前コンパイル済み正規表現使用）
             if self._ng_pattern and self._ng_pattern.search(text):
                 logger.debug(f"🚫 NGワード検出 in '{text[:50]}...'")
@@ -875,16 +894,22 @@ class ContentGenerator:
                 "is_meat_topic": False,
             }
 
-    def generate_quote_comment(self, original_tweet_text: str, posted_at: Optional[datetime] = None) -> str:
+    def generate_quote_comment(
+        self,
+        original_tweet_text: str,
+        posted_at: Optional[datetime] = None,
+        extra_keywords: Optional[List[str]] = None,
+    ) -> str:
         """食関連ツイート用のコメント生成（優先度対応版）
 
         Args:
             posted_at: 元ツイートの投稿時刻（タイムゾーン付き）。時間帯の一言はこの時刻で決める
                 （夜の投稿に朝のあいさつを付けないため）。省略時は現在時刻を使う
+            extra_keywords: 本文以外から分かったキーワード（写真に写っていた料理など）
         """
         try:
             # キーワードの優先度スコアを取得
-            score_info = self.get_food_keyword_score(original_tweet_text)
+            score_info = self.get_food_keyword_score(original_tweet_text, extra_keywords)
 
             if not score_info["is_food_related"]:
                 logger.warning("⚠️ Trying to generate comment for non-food-related tweet")

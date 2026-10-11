@@ -4,6 +4,7 @@ from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.jev_checker import JevChecker
+from nikune.photo_checker import PhotoChecker, PhotoVerdict
 from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decide, is_uncertain
 from nikune.twitter_client import TwitterClient
 
@@ -386,7 +387,7 @@ class TweetAgeFilterTests(TestCase):
         ):
             retweeter.check_and_quote_tweets()
 
-        self.assertEqual(generate.call_args.args, ("牛丼", tweet.created_at))
+        self.assertEqual(generate.call_args.args, ("牛丼", tweet.created_at, []))
 
 
 class MeatFirstSelectionTests(TestCase):
@@ -457,3 +458,83 @@ class MeatFirstSelectionTests(TestCase):
             with self.subTest(text=text):
                 score_info = retweeter.content_generator.get_food_keyword_score(text)
                 self.assertTrue(score_info["is_meat_topic"])
+
+
+def _photo_tweet(tweet_id: str, text: str) -> SimpleNamespace:
+    photo_url = f"https://example.com/{tweet_id}.jpg"
+    return SimpleNamespace(
+        id=tweet_id, text=text, author_id="u", author_username="u", created_at="", photo_urls=[photo_url]
+    )
+
+
+class PhotoCheckTests(TestCase):
+    """写真付きの候補は写真も見て、肉が写っている投稿を最優先にすることの確認"""
+
+    def _run(
+        self, verdicts: Dict[str, Any], timeline: list[SimpleNamespace], max_per_run: int = 5
+    ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
+        photo_checker = mock.MagicMock(spec=PhotoChecker)
+        photo_checker.enabled = True
+        photo_checker.check.side_effect = lambda url, dishes: verdicts.get(url.rsplit("/", 1)[-1].removesuffix(".jpg"))
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True, photo_checker=photo_checker)
+        retweeter.dry_run = False
+        retweeter.content_generator._specific_keyword_comments = [("寿司", ["テスト用の専用コメント"])]
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+            mock.patch("nikune.auto_quote_retweeter.PHOTO_CHECK_MAX_PER_RUN", max_per_run),
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return results, post, photo_checker
+
+    def test_meat_in_photo_is_quoted_even_when_the_text_has_no_food_word(self) -> None:
+        verdicts = {"shop": PhotoVerdict(is_food=True, shows_meat=True, dishes=[])}
+        timeline = [_food_tweet("text_meat", "牛肉"), _photo_tweet("shop", "三軒茶屋のお店。")]
+
+        results, post, _ = self._run(verdicts, timeline)
+
+        self.assertEqual(results["photo_checked"], 1)
+        self.assertEqual(post.call_args.args[0], "shop")
+
+    def test_dish_in_photo_selects_its_dedicated_comment(self) -> None:
+        verdicts = {"date_only": PhotoVerdict(is_food=True, shows_meat=False, dishes=["寿司"])}
+
+        _, post, _ = self._run(verdicts, [_photo_tweet("date_only", "2026年10月8日")])
+
+        self.assertEqual(post.call_args.args[0], "date_only")
+        self.assertIn("テスト用の専用コメント", post.call_args.args[2])
+
+    def test_non_food_photo_does_not_make_a_tweet_quotable(self) -> None:
+        verdicts = {"cat": PhotoVerdict(is_food=False, shows_meat=False, dishes=[])}
+
+        _, post, _ = self._run(verdicts, [_photo_tweet("cat", "かわいい")])
+
+        post.assert_not_called()
+
+    def test_failed_photo_check_falls_back_to_text_rules(self) -> None:
+        results, post, _ = self._run({}, [_photo_tweet("meat", "焼肉たべた")])
+
+        self.assertEqual(results["photo_unavailable"], 1)
+        self.assertEqual(post.call_args.args[0], "meat")
+
+    def test_photo_checks_are_capped_per_run(self) -> None:
+        timeline = [_photo_tweet(f"t{i}", "かわいい") for i in range(4)]
+
+        _, _, photo_checker = self._run({}, timeline, max_per_run=2)
+
+        self.assertEqual(photo_checker.check.call_count, 2)
+
+    def test_old_tweets_and_tweets_without_photos_are_not_sent(self) -> None:
+        old = _tweet_posted("old", "焼肉たべた", hours_ago=9)
+        old.photo_urls = ["https://example.com/old.jpg"]
+
+        _, _, photo_checker = self._run({}, [old, _food_tweet("no_photo", "牛肉")])
+
+        photo_checker.check.assert_not_called()
+
+    def test_disabled_checker_is_never_called(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+
+        self.assertFalse(retweeter.photo_checker.enabled)
+        self.assertEqual(retweeter._check_photos([_photo_tweet("t1", "焼肉")], set(), {}), {})

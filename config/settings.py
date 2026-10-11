@@ -50,6 +50,15 @@ TYPESAFE_API_KEY = (os.getenv("TYPESAFE_API_KEY") or "").strip() or None
 TYPESAFE_MODEL = (os.getenv("TYPESAFE_MODEL") or "").strip() or "jev-1.13.0"
 TYPESAFE_TIMEOUT_SECONDS = float(os.getenv("TYPESAFE_TIMEOUT_SECONDS", "10"))
 
+# 引用RT候補の写真チェック（Claude）設定
+# - ANTHROPIC_API_KEY が未設定（空文字含む）なら写真は見ず、本文だけで従来どおり判定する
+# - キーの値はログや通知に出さないこと
+ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
+PHOTO_CHECK_MODEL = (os.getenv("PHOTO_CHECK_MODEL") or "").strip() or "claude-opus-5-5"
+PHOTO_CHECK_TIMEOUT_SECONDS = float(os.getenv("PHOTO_CHECK_TIMEOUT_SECONDS", "30"))
+# 1回の実行で写真を見る候補の上限（費用の上限。1候補につき見る写真は1枚目だけ）
+PHOTO_CHECK_MAX_PER_RUN = int(os.getenv("PHOTO_CHECK_MAX_PER_RUN", "5"))
+
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）
 def _load_ng_keywords() -> list[str]:
