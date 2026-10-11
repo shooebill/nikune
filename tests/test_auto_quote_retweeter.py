@@ -275,28 +275,29 @@ def _food_tweet(tweet_id: str, text: str) -> SimpleNamespace:
     return SimpleNamespace(id=tweet_id, text=text, author_id="u", author_username="u", created_at="")
 
 
+def _run_live(
+    db: mock.MagicMock, tweets: list[SimpleNamespace]
+) -> tuple[AutoQuoteRetweeter, Dict[str, Any], mock.MagicMock]:
+    retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
+    retweeter.dry_run = False  # 投稿はモックに差し替えて本番経路を通す
+    with (
+        mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=tweets),
+        mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+        mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+    ):
+        results = retweeter.check_and_quote_tweets()
+    return retweeter, results, post
+
+
 class CrossRunRateLimitTests(TestCase):
     """cronで毎回別プロセスとして起動しても、上限を超えて・同じツイートを引用しないことの確認
     （2026-09-27 12:30、HIGH優先度の候補が続いて1回の実行で3件投稿した不具合の回帰テスト）"""
-
-    def _run_live(
-        self, db: mock.MagicMock, tweets: list[SimpleNamespace]
-    ) -> tuple[AutoQuoteRetweeter, Dict[str, Any], mock.MagicMock]:
-        retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
-        retweeter.dry_run = False  # 投稿はモックに差し替えて本番経路を通す
-        with (
-            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=tweets),
-            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
-            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
-        ):
-            results = retweeter.check_and_quote_tweets()
-        return retweeter, results, post
 
     def test_consecutive_high_priority_candidates_post_only_once(self) -> None:
         db = _make_db_mock()
         tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた"), _food_tweet("t3", "ラーメン")]
 
-        _, results, post = self._run_live(db, tweets)
+        _, results, post = _run_live(db, tweets)
 
         self.assertEqual(results["quote_posted"], 1)
         post.assert_called_once()
@@ -308,7 +309,7 @@ class CrossRunRateLimitTests(TestCase):
         db.has_quoted.side_effect = lambda tweet_id: tweet_id == "t1"
         tweets = [_food_tweet("t1", "焼肉たべた"), _food_tweet("t2", "寿司たべた")]
 
-        _, results, post = self._run_live(db, tweets)
+        _, results, post = _run_live(db, tweets)
 
         self.assertEqual(results["quote_posted"], 1)
         self.assertEqual(post.call_args.args[0], "t2")
@@ -319,8 +320,70 @@ class CrossRunRateLimitTests(TestCase):
         db = _make_db_mock()
         db.get_quotes_since.return_value = [{"quoted_at": datetime.now() - timedelta(minutes=10), "priority_score": 3}]
 
-        retweeter, results, post = self._run_live(db, [_food_tweet("t1", "焼肉たべた")])
+        retweeter, results, post = _run_live(db, [_food_tweet("t1", "焼肉たべた")])
 
         self.assertEqual(results["skipped_rate_limit"], 1)
         post.assert_not_called()
         self.assertIsNotNone(retweeter.last_quote_time)
+
+
+def _tweet_posted(tweet_id: str, text: str, hours_ago: float) -> SimpleNamespace:
+    from datetime import datetime, timedelta, timezone
+
+    posted_at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    return SimpleNamespace(id=tweet_id, text=text, author_id="u", author_username="u", created_at=posted_at)
+
+
+class TweetAgeFilterTests(TestCase):
+    """古いツイートやリツイートを引用しないことの確認
+    （前の晩22〜23時台の投稿に、翌朝8:30の回が朝のあいさつ付きで引用していた不具合の回帰テスト）"""
+
+    def test_old_tweet_is_skipped_and_fresh_one_is_quoted(self) -> None:
+        db = _make_db_mock()
+        tweets = [_tweet_posted("old", "焼肉たべた", hours_ago=9), _tweet_posted("fresh", "ラーメン", hours_ago=1)]
+
+        _, results, post = _run_live(db, tweets)
+
+        self.assertEqual(results["skipped_too_old"], 1)
+        self.assertEqual(results["quote_posted"], 1)
+        self.assertEqual(post.call_args.args[0], "fresh")
+
+    def test_only_old_tweets_posts_nothing(self) -> None:
+        db = _make_db_mock()
+
+        _, results, post = _run_live(db, [_tweet_posted("old", "焼肉たべた", hours_ago=3.5)])
+
+        self.assertTrue(results["success"])
+        self.assertEqual(results["quote_posted"], 0)
+        post.assert_not_called()
+
+    def test_retweet_is_skipped(self) -> None:
+        db = _make_db_mock()
+
+        _, results, post = _run_live(db, [_tweet_posted("rt", "RT @someone: 牛スジでカレーを作った", hours_ago=0.5)])
+
+        self.assertEqual(results["skipped_retweet"], 1)
+        post.assert_not_called()
+
+    def test_tweet_without_known_post_time_is_not_skipped(self) -> None:
+        db = _make_db_mock()
+
+        _, results, post = _run_live(db, [_food_tweet("t1", "焼肉たべた")])
+
+        self.assertEqual(results["skipped_too_old"], 0)
+        post.assert_called_once()
+
+    def test_time_phrase_follows_the_tweet_post_time(self) -> None:
+        db = _make_db_mock()
+        tweet = _tweet_posted("t1", "ラーメン", hours_ago=1)
+        retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
+        retweeter.dry_run = False
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=[tweet]),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1"),
+            mock.patch.object(retweeter.content_generator, "generate_quote_comment", return_value="c") as generate,
+        ):
+            retweeter.check_and_quote_tweets()
+
+        self.assertEqual(generate.call_args.args, ("ラーメン", tweet.created_at))

@@ -865,8 +865,13 @@ class ContentGenerator:
                 "is_meat_topic": False,
             }
 
-    def generate_quote_comment(self, original_tweet_text: str) -> str:
-        """食関連ツイート用のコメント生成（優先度対応版）"""
+    def generate_quote_comment(self, original_tweet_text: str, posted_at: Optional[datetime] = None) -> str:
+        """食関連ツイート用のコメント生成（優先度対応版）
+
+        Args:
+            posted_at: 元ツイートの投稿時刻（タイムゾーン付き）。時間帯の一言はこの時刻で決める
+                （夜の投稿に朝のあいさつを付けないため）。省略時は現在時刻を使う
+        """
         try:
             # キーワードの優先度スコアを取得
             score_info = self.get_food_keyword_score(original_tweet_text)
@@ -881,8 +886,9 @@ class ContentGenerator:
             )
 
             # 時間帯に応じた追加コメント
-            current_hour = datetime.now().hour
-            time_comment = self._get_time_based_comment(current_hour, score_info["score"])
+            # astimezone()で実行環境のローカル時刻（本番はJST）に直す
+            hour = posted_at.astimezone().hour if posted_at is not None else datetime.now().hour
+            time_comment = self._get_time_based_comment(hour, score_info["score"])
 
             # 絵文字ルールを一元適用（🐻署名＋肉トピック時のみ🥩🍖）
             final_comment = self._decorate_comment(base_comment + time_comment, score_info["is_meat_topic"])

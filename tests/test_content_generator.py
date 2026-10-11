@@ -265,3 +265,22 @@ class TweetContentGenerationCooldownTests(TestCase):
 
         self.assertIsNone(generated)
         self.db_manager.record_tweet_usage.assert_not_called()
+
+
+class QuoteCommentTimePhraseTests(TestCase):
+    """時間帯の一言は、起動時刻ではなく元ツイートの投稿時刻で決まることの確認"""
+
+    def setUp(self) -> None:
+        self.generator = _make_generator()
+
+    def test_hour_passed_to_time_phrase_is_the_local_hour_of_the_post(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+
+        jst = timezone(timedelta(hours=9))
+        posted_at = datetime(2026, 9, 29, 23, 32, tzinfo=jst)
+
+        with mock.patch.object(self.generator, "_get_time_based_comment", return_value="") as time_phrase:
+            self.generator.generate_quote_comment("ラーメン食べた", posted_at)
+
+        self.assertEqual(time_phrase.call_args.args[0], posted_at.astimezone().hour)

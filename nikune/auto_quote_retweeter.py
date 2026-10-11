@@ -7,13 +7,14 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from config.settings import (
     BOT_NAME,
     QUOTE_RETWEET_HIGH_PRIORITY_LIMIT,
     QUOTE_RETWEET_MAX_PER_HOUR,
+    QUOTE_RETWEET_MAX_TWEET_AGE_HOURS,
     QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
     QUOTE_RETWEET_MIN_PRIORITY_SCORE,
 )
@@ -78,6 +79,7 @@ class AutoQuoteRetweeter:
         self.min_interval_minutes = QUOTE_RETWEET_MIN_INTERVAL_MINUTES
         self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
+        self.max_tweet_age = timedelta(hours=QUOTE_RETWEET_MAX_TWEET_AGE_HOURS)
 
         # 優先度システム設定
         self.min_priority_score = QUOTE_RETWEET_MIN_PRIORITY_SCORE
@@ -141,6 +143,8 @@ class AutoQuoteRetweeter:
                 "food_related_found": 0,
                 "quote_posted": 0,
                 "skipped_rate_limit": 0,
+                "skipped_too_old": 0,
+                "skipped_retweet": 0,
                 "skipped_by_jev": 0,
                 "jev_unavailable": 0,
                 "errors": [],
@@ -155,6 +159,7 @@ class AutoQuoteRetweeter:
                 return results
 
             # タイムライン取得（ドライラン時はモックデータ使用）
+            search_tweet_ids: set[Any] = set()  # 検索APIから来た候補（ログで出どころを区別するため）
             if self.dry_run:
                 timeline_tweets = self._get_mock_timeline()
                 logger.info("🎭 Using mock timeline data for dry run")
@@ -167,6 +172,7 @@ class AutoQuoteRetweeter:
 
                 search_tweets = self._fetch_search_candidates()
                 timeline_tweets = fetched_tweets + search_tweets
+                search_tweet_ids = {tweet.id for tweet in search_tweets}
 
             if not timeline_tweets:
                 logger.info("📭 No tweets found in timeline")
@@ -203,6 +209,18 @@ class AutoQuoteRetweeter:
                     if self._is_own_tweet(tweet):
                         continue
 
+                    # フォロー中の人がリツイートしたもの（本文は他人の投稿で途中までしか入っていない）は除外
+                    if tweet.text.startswith("RT @"):
+                        results["skipped_retweet"] += 1
+                        continue
+
+                    # 古いツイートは除外（投稿時刻が分からないものは除外しない）
+                    posted_at = self._posted_at(tweet)
+                    if posted_at is not None and datetime.now(timezone.utc) - posted_at > self.max_tweet_age:
+                        results["skipped_too_old"] += 1
+                        logger.debug(f"⏭️ Too old to quote: {tweet.id} (posted {posted_at.isoformat()})")
+                        continue
+
                     # 食関連ツイートかチェック（お肉＋食・レストラン全般、優先度スコアリング対応）
                     score_info = self.content_generator.get_food_keyword_score(tweet.text)
 
@@ -212,7 +230,8 @@ class AutoQuoteRetweeter:
                         score = score_info["score"]
                         keywords = score_info["matched_keywords"]
 
-                        logger.info(f"🍽️ Found food-related tweet: {tweet.id}")
+                        source = "search" if tweet.id in search_tweet_ids else "timeline"
+                        logger.info(f"🍽️ Found food-related tweet: {tweet.id} (source={source})")
                         logger.info(f"🎯 Priority: {priority_level} (Score: {score})")
                         logger.info(f"🔍 Keywords: {keywords}")
                         logger.info(f"💬📝 Content: {tweet.text[:100]}...")
@@ -244,7 +263,7 @@ class AutoQuoteRetweeter:
                             continue
 
                         # コメント生成（優先度対応版）
-                        comment = self.content_generator.generate_quote_comment(tweet.text)
+                        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at)
 
                         if self.dry_run:
                             pseudo_url = f"https://x.com/{author_username or 'unknown'}/status/{tweet.id}"
@@ -296,6 +315,11 @@ class AutoQuoteRetweeter:
             # 処理結果のサマリーログ
             if skipped_processed > 0:
                 logger.info(f"📊 Skipped {skipped_processed} already processed tweets")
+            if results["skipped_too_old"] > 0 or results["skipped_retweet"] > 0:
+                logger.info(
+                    f"📊 Skipped {results['skipped_too_old']} tweets older than "
+                    f"{QUOTE_RETWEET_MAX_TWEET_AGE_HOURS:g}h, {results['skipped_retweet']} retweets"
+                )
 
             return results
 
@@ -424,9 +448,21 @@ class AutoQuoteRetweeter:
         except Exception:
             return False
 
+    @staticmethod
+    def _posted_at(tweet: Any) -> Optional[datetime]:
+        """ツイートの投稿時刻（タイムゾーン付き）。APIが返すdatetime以外は「分からない」としてNoneを返す"""
+        created_at = getattr(tweet, "created_at", None)
+        if not isinstance(created_at, datetime):
+            return None
+        if created_at.tzinfo is None:
+            return created_at.replace(tzinfo=timezone.utc)
+        return created_at
+
     def _get_mock_timeline(self) -> List[Any]:
         """ドライラン用のモックタイムラインデータを生成"""
         from types import SimpleNamespace
+
+        now = datetime.now(timezone.utc)
 
         mock_tweets = [
             SimpleNamespace(
@@ -438,49 +474,49 @@ class AutoQuoteRetweeter:
                 ),
                 author_id="mock_user_1",
                 author_username="mock_user_1",
-                created_at="2024-10-29T10:00:00.000Z",
+                created_at=now - timedelta(minutes=10),
             ),
             SimpleNamespace(
                 id="mock_tweet_2",
                 text="今日は良い天気ですね〜お散歩日和です",
                 author_id="mock_user_2",
                 author_username="mock_user_2",
-                created_at="2024-10-29T09:30:00.000Z",
+                created_at=now - timedelta(minutes=20),
             ),
             SimpleNamespace(
                 id="mock_tweet_3",
                 text="美味しいステーキを食べました🥩とても柔らかくて最高でした！",
                 author_id="mock_user_3",
                 author_username="mock_user_3",
-                created_at="2024-10-29T09:00:00.000Z",
+                created_at=now - timedelta(minutes=30),
             ),
             SimpleNamespace(
                 id="mock_tweet_4",
                 text="プログラミングの勉強中です。Pythonは楽しいですね",
                 author_id="mock_user_4",
                 author_username="mock_user_4",
-                created_at="2024-10-29T08:30:00.000Z",
+                created_at=now - timedelta(minutes=40),
             ),
             SimpleNamespace(
                 id="mock_tweet_5",
                 text="焼肉パーティーしました🍖みんなでワイワイ楽しかった〜",
                 author_id="mock_user_5",
                 author_username="mock_user_5",
-                created_at="2024-10-29T08:00:00.000Z",
+                created_at=now - timedelta(minutes=50),
             ),
             SimpleNamespace(
                 id="mock_tweet_6",
                 text="寿司ランチに行ってきました！美味しかった〜",
                 author_id="mock_user_6",
                 author_username="mock_user_6",
-                created_at="2024-10-29T07:30:00.000Z",
+                created_at=now - timedelta(minutes=60),
             ),
             SimpleNamespace(
                 id="mock_tweet_7",
                 text="カレーライス作りました！スパイシーで美味しい",
                 author_id="mock_user_7",
                 author_username="mock_user_7",
-                created_at="2024-10-29T07:00:00.000Z",
+                created_at=now - timedelta(minutes=70),
             ),
         ]
 
