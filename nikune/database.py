@@ -28,6 +28,12 @@ SIMILARITY_THRESHOLD = 0.85
 # 時間帯の制限がないトーンのセリフを出してよい「時」（＝いつでも）
 ALL_HOURS = frozenset(range(24))
 
+
+def _is_later_step(template: Dict[str, Any]) -> bool:
+    """続きもの（series）の2番目以降のセリフかどうか"""
+    return bool(template.get("series")) and int(template.get("series_order") or 1) > 1
+
+
 # ログ設定
 # ロギングの基本設定（ハンドラ・フォーマット）はエントリポイント（main.py）側で行う。
 # ライブラリ側のモジュールでlogging.basicConfig()を呼ぶと、最初に呼ばれた設定だけが
@@ -126,6 +132,13 @@ class DatabaseManager:
         """
         )
 
+        # 続きもののセリフ（前振り→オチ）の列。以前に作ったDBにはないので、なければ足す
+        existing_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(tweet_templates)")}
+        if "series" not in existing_columns:
+            cursor.execute("ALTER TABLE tweet_templates ADD COLUMN series TEXT")
+        if "series_order" not in existing_columns:
+            cursor.execute("ALTER TABLE tweet_templates ADD COLUMN series_order INTEGER")
+
         # 引用RTの履歴テーブル（cronで毎回別プロセスとして起動しても、同じツイートを再度引用しないため・
         # 実行をまたいでレート制限を効かせるために使う。--setup-db でも消さない）
         cursor.execute(
@@ -157,7 +170,14 @@ class DatabaseManager:
 
     # ===== テンプレート管理（SQLite） =====
 
-    def add_template(self, category: str, tone: str, template: str) -> int:
+    def add_template(
+        self,
+        category: str,
+        tone: str,
+        template: str,
+        series: Optional[str] = None,
+        series_order: Optional[int] = None,
+    ) -> int:
         """
         新しいテンプレートを追加
 
@@ -165,6 +185,8 @@ class DatabaseManager:
             category: カテゴリ（お肉、日常、季節等）
             tone: トーン（可愛い、元気、癒し等）
             template: テンプレート文
+            series: 続きもののネタ名（前振り→オチの組に同じ名前を付ける）。単発のセリフはNone
+            series_order: 続きものの中での順番（1が前振り、2がその次）
 
         Returns:
             追加されたテンプレートのID
@@ -172,10 +194,10 @@ class DatabaseManager:
         cursor = self.sqlite_conn.cursor()
         cursor.execute(
             """
-            INSERT INTO tweet_templates (category, tone, template)
-            VALUES (?, ?, ?)
+            INSERT INTO tweet_templates (category, tone, template, series, series_order)
+            VALUES (?, ?, ?, ?, ?)
         """,
-            (category, tone, template),
+            (category, tone, template, series, series_order),
         )
 
         template_id: int = cursor.lastrowid or 0
@@ -423,6 +445,8 @@ class DatabaseManager:
         今は次の順に候補を絞り、残った中からランダムに選ぶ:
 
             0. 今の時間帯に出せないセリフ（TIME_LIMITED_TONES のトーンで、時間帯が外れているもの）を外す
+               続きもの（series）の2番目以降も外す。直前の投稿が同じ続きものの1つ前だったときだけ、
+               ここで外す前に「続き」として優先して選ぶ（前振りの次の回にオチが出る）
             1. 直近に使ったセリフ（候補全体の RECENT_AVOID_RATIO にあたる本数）を外す
             2. 直近 SIMILAR_LOOKBACK 回の投稿とほぼ同じ文（一部だけ違うセリフ）を外す
 
@@ -446,6 +470,18 @@ class DatabaseManager:
             logger.warning("⚠️ No templates found")
             return None
 
+        follow_up = self._follow_up_of_last_post(templates)
+        if follow_up is not None:
+            logger.info(f"🎬 Follow-up template selected: ID={follow_up['id']}, Series={follow_up['series']}")
+            if self.can_use_template(int(follow_up["id"])):
+                return follow_up
+
+        # 続きものの2番目以降は、前振りの直後にしか出さない
+        templates = [t for t in templates if not _is_later_step(t)]
+        if not templates:
+            logger.warning("⚠️ No templates found")
+            return None
+
         candidates = self._templates_avoiding_recent(templates)
         random.shuffle(candidates)
 
@@ -458,6 +494,27 @@ class DatabaseManager:
 
         logger.warning("⚠️ No available templates found after max attempts")
         return None
+
+    def _follow_up_of_last_post(self, templates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """直前の投稿が続きものだったとき、その次の順番のセリフを返す（なければNone）"""
+        last_posts = self.get_recent_post_texts(limit=1)
+        if not last_posts:
+            return None
+
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute(
+            "SELECT series, series_order FROM tweet_templates"
+            " WHERE template = ? AND series IS NOT NULL AND series_order IS NOT NULL",
+            (last_posts[0],),
+        )
+        last = cursor.fetchone()
+        if last is None:
+            return None
+
+        next_steps = [
+            t for t in templates if t["series"] == last["series"] and t["series_order"] == last["series_order"] + 1
+        ]
+        return random.choice(next_steps) if next_steps else None
 
     def _templates_avoiding_recent(self, templates: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """最近使ったセリフと、直近の投稿に似たセリフを外した候補を返す（空になるなら条件をゆるめる）"""
@@ -515,12 +572,20 @@ class DatabaseManager:
                         continue
 
                     # テンプレートを追加
+                    # 続きもの（series/order列）は任意。列がない・空欄のTSVは単発のセリフとして扱う
+                    series = (row.get("series") or "").strip() or None
+                    order_text = (row.get("order") or "").strip()
+                    series_order = int(order_text) if series and order_text.isdigit() else None
+                    if series and series_order is None:
+                        logger.warning(f"⚠️ series '{series}' has no valid order, imported as a standalone line")
+                        series = None
+
                     cursor.execute(
                         """
-                        INSERT INTO tweet_templates (category, tone, template)
-                        VALUES (?, ?, ?)
+                        INSERT INTO tweet_templates (category, tone, template, series, series_order)
+                        VALUES (?, ?, ?, ?, ?)
                     """,
-                        (row["category"], row["tone"], row["template"]),
+                        (row["category"], row["tone"], row["template"], series, series_order),
                     )
 
                     imported_count += 1

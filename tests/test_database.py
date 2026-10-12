@@ -300,3 +300,90 @@ class TimeLimitedToneTests(TestCase):
         db.add_template("日常", "朝活", "朝のセリフ")
 
         self.assertIsNone(db.get_available_template(now=datetime(2026, 10, 12, 15, 0)))
+
+
+class SeriesOrderTests(TestCase):
+    """続きもの（前振り→オチ）は、前振りの次の回にだけオチが出ることの確認
+    （オチが前振りより先に出たことがあったための対応）"""
+
+    def _db(self) -> DatabaseManager:
+        db = _make_db_manager_without_connections()
+        db.redis_client = cast(Any, FakeCooldownRedis())
+        db.add_template("日常", "ボケ", "前振り", series="ネタ", series_order=1)
+        db.add_template("日常", "困惑", "オチ", series="ネタ", series_order=2)
+        for i in range(5):
+            db.add_template("お肉", "元気", f"単発{i}")
+        return db
+
+    def test_punchline_is_never_picked_without_its_setup(self) -> None:
+        db = self._db()
+        db.record_post(_template_id(db, "単発0"))
+
+        picked = {db.get_available_template()["template"] for _ in range(80)}  # type: ignore[index]
+
+        self.assertNotIn("オチ", picked)
+        self.assertIn("前振り", picked)
+
+    def test_punchline_follows_right_after_its_setup(self) -> None:
+        db = self._db()
+        db.record_post(_template_id(db, "前振り"))
+
+        picked = {db.get_available_template()["template"] for _ in range(20)}  # type: ignore[index]
+
+        self.assertEqual(picked, {"オチ"})
+
+    def test_punchline_is_not_picked_once_another_line_came_in_between(self) -> None:
+        db = self._db()
+        db.record_post(_template_id(db, "前振り"))
+        db.record_post(_template_id(db, "単発1"))
+
+        picked = {db.get_available_template()["template"] for _ in range(80)}  # type: ignore[index]
+
+        self.assertNotIn("オチ", picked)
+
+    def test_punchline_outside_its_time_window_is_skipped(self) -> None:
+        db = _make_db_manager_without_connections()
+        db.redis_client = cast(Any, FakeCooldownRedis())
+        db.add_template("日常", "ボケ", "前振り", series="ネタ", series_order=1)
+        db.add_template("日常", "朝活", "朝だけのオチ", series="ネタ", series_order=2)
+        db.add_template("お肉", "元気", "単発")
+        db.record_post(_template_id(db, "前振り"))
+
+        template = db.get_available_template(now=datetime(2026, 10, 12, 15, 0))
+
+        assert template is not None
+        self.assertEqual(template["template"], "単発")
+
+    def test_series_columns_are_imported_from_tsv_and_optional(self) -> None:
+        import tempfile
+
+        db = _make_db_manager_without_connections()
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", encoding="utf-8", delete=False) as f:
+            f.write("category\ttone\ttemplate\tseries\torder\n")
+            f.write("日常\tボケ\t前振り\tネタ\t1\n")
+            f.write("日常\t困惑\tオチ\tネタ\t2\n")
+            f.write("お肉\t元気\t単発\t\t\n")
+            f.write("お肉\t元気\t順番なし\tネタ\t\n")
+
+        self.assertEqual(db.import_templates_from_tsv(f.name), 4)
+        by_text = {t["template"]: (t["series"], t["series_order"]) for t in db.get_templates()}
+        self.assertEqual(by_text["前振り"], ("ネタ", 1))
+        self.assertEqual(by_text["オチ"], ("ネタ", 2))
+        self.assertEqual(by_text["単発"], (None, None))
+        self.assertEqual(by_text["順番なし"], (None, None))
+
+    def test_database_created_before_this_change_gets_the_new_columns(self) -> None:
+        db = DatabaseManager.__new__(DatabaseManager)
+        db.sqlite_conn = sqlite3.connect(":memory:")
+        db.sqlite_conn.row_factory = sqlite3.Row
+        db.sqlite_conn.execute(
+            "CREATE TABLE tweet_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL,"
+            " tone TEXT NOT NULL, template TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            " is_active BOOLEAN DEFAULT 1)"
+        )
+        db.sqlite_conn.execute("INSERT INTO tweet_templates (category, tone, template) VALUES ('お肉', '元気', '既存')")
+
+        db._create_tables()
+        db._create_tables()  # 2回呼んでも壊れない
+
+        self.assertEqual(db.get_templates()[0]["series"], None)
