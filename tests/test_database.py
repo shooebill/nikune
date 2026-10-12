@@ -157,3 +157,107 @@ class QuoteHistoryTests(TestCase):
         db.clear_all_templates()
 
         self.assertTrue(db.has_quoted("111"))
+
+
+class FakeCooldownRedis:
+    """クールダウン判定（exists/setex/incr）だけを持つテストダブル"""
+
+    def __init__(self) -> None:
+        self.keys: Set[str] = set()
+
+    def exists(self, key: str) -> bool:
+        return key in self.keys
+
+    def setex(self, key: str, ttl: int, value: str) -> None:
+        self.keys.add(key)
+
+    def incr(self, key: str) -> None:
+        pass
+
+    def scan_iter(self, match: Optional[str] = None) -> List[str]:
+        return []
+
+
+def _db_with_templates(texts: List[str]) -> DatabaseManager:
+    db = _make_db_manager_without_connections()
+    db.redis_client = cast(Any, FakeCooldownRedis())
+    for text in texts:
+        db.add_template("お肉", "元気", text)
+    return db
+
+
+def _template_id(db: DatabaseManager, text: str) -> int:
+    return next(int(t["id"]) for t in db.get_templates() if t["template"] == text)
+
+
+class AvoidRecentTemplateTests(TestCase):
+    """最近使ったセリフ・直近の投稿に似たセリフを避けて選ぶことの確認
+    （同じセリフが28時間後に戻り、ほぼ同じ2本が5投稿中3回出ていたことへの対応）"""
+
+    def test_recently_used_templates_are_not_selected(self) -> None:
+        db = _db_with_templates([f"セリフ{i}" for i in range(10)])
+        for i in range(6):  # 10本の6割 = 直近6本を避ける
+            db.record_post(_template_id(db, f"セリフ{i}"))
+
+        picked = {db.get_available_template()["template"] for _ in range(50)}  # type: ignore[index]
+
+        self.assertTrue(picked <= {"セリフ6", "セリフ7", "セリフ8", "セリフ9"})
+
+    def test_same_line_does_not_return_until_enough_other_lines_were_posted(self) -> None:
+        db = _db_with_templates([f"セリフ{i}" for i in range(19)])
+        posted: List[str] = []
+        for _ in range(200):
+            template = db.get_available_template()
+            assert template is not None
+            posted.append(template["template"])
+            db.record_post(int(template["id"]))
+
+        # 19本の6割 = 直近11本を避けるので、同じセリフは直前の11投稿に出てこない
+        for i, text in enumerate(posted):
+            self.assertNotIn(text, posted[max(0, i - 11) : i])
+        self.assertEqual(len(set(posted)), 19)
+
+    def test_near_duplicate_of_the_last_post_is_not_selected(self) -> None:
+        db = _db_with_templates(["肉しか見えない", "肉しか見えていない", "まったく別のセリフ"])
+        db.record_post(_template_id(db, "肉しか見えない"))
+
+        picked = {db.get_available_template()["template"] for _ in range(30)}  # type: ignore[index]
+
+        self.assertEqual(picked, {"まったく別のセリフ"})
+
+    def test_short_series_lines_are_not_treated_as_near_duplicates(self) -> None:
+        db = _db_with_templates(["肉ね！", "うお肉ね！", "まったく別のセリフ"])
+        db.record_post(_template_id(db, "肉ね！"))
+
+        picked = {db.get_available_template()["template"] for _ in range(60)}  # type: ignore[index]
+
+        self.assertIn("うお肉ね！", picked)
+
+    def test_single_template_pool_is_still_selectable(self) -> None:
+        db = _db_with_templates(["ひとつだけ"])
+        db.record_post(_template_id(db, "ひとつだけ"))
+
+        template = db.get_available_template()
+
+        assert template is not None
+        self.assertEqual(template["template"], "ひとつだけ")
+
+    def test_redis_cooldown_is_still_respected(self) -> None:
+        db = _db_with_templates(["セリフA", "セリフB"])
+        db.record_tweet_usage(_template_id(db, "セリフA"), "🐻 セリフA")
+
+        picked = {db.get_available_template()["template"] for _ in range(20)}  # type: ignore[index]
+
+        self.assertEqual(picked, {"セリフB"})
+
+    def test_history_matches_by_text_after_templates_are_reimported(self) -> None:
+        db = _db_with_templates(["セリフA", "セリフB", "セリフC"])
+        db.record_post(_template_id(db, "セリフA"))
+        db.clear_all_templates()
+        for text in ["セリフA", "セリフB", "セリフC"]:
+            db.add_template("お肉", "元気", text)
+
+        picked = {db.get_available_template()["template"] for _ in range(30)}  # type: ignore[index]
+
+        self.assertNotIn("セリフA", picked)
+        self.assertEqual(db.get_recent_post_texts(limit=5), ["セリフA"])
