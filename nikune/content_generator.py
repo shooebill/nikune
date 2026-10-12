@@ -141,6 +141,9 @@ class ContentGenerator:
     _FALLBACK_MEDIUM_PRIORITY_COMMENTS: List[str] = ["肉ね！美味しそう！", "肉だ！"]
     _FALLBACK_DEFAULT_QUOTE_COMMENTS: List[str] = ["肉ね！", "肉よ！", "肉しか見えない"]
 
+    # 時間帯の一言をTSVで差し替えるときの bucket 名（_get_time_based_comment() を参照）
+    TIME_PHRASE_BUCKETS = ("time_morning", "time_lunch", "time_dinner", "time_other")
+
     # 時間帯判定用設定（config/settings.pyから読み込み）
     MORNING_START = TIME_SETTINGS["MORNING_START"]
     MORNING_END = TIME_SETTINGS["MORNING_END"]
@@ -365,6 +368,8 @@ class ContentGenerator:
 
         ファイル形式（タブ区切り、ヘッダー行あり）: bucket, keyword, text
             - bucket: "specific" | "high" | "medium" | "default"
+              または時間帯の一言 "time_morning" | "time_lunch" | "time_dinner" | "time_other"
+              （時間帯の一言は self._time_phrases に入れる。行がない時間帯はコード側の文言を使う）
             - keyword: bucket="specific" の時のみ使用（マッチしたキーワードとの照合に使う）
             - text: コメント本文（絵文字は含めない。付与は _decorate_comment() が一元的に行う）
 
@@ -372,6 +377,8 @@ class ContentGenerator:
             (specific_keyword_comments, high_priority_comments,
              medium_priority_comments, default_quote_comments) のタプル
         """
+        self._time_phrases: Dict[str, List[str]] = {}
+
         if not Path(self.QUOTE_COMMENTS_FILE).exists():
             logger.warning(
                 f"⚠️ 引用コメントファイルが見つかりませんでした: {self.QUOTE_COMMENTS_FILE}。"
@@ -408,6 +415,8 @@ class ContentGenerator:
                         medium.append(text)
                     elif bucket == "default":
                         default.append(text)
+                    elif bucket in self.TIME_PHRASE_BUCKETS:
+                        self._time_phrases.setdefault(bucket, []).append(text)
 
             specific = list(specific_map.items())
 
@@ -920,10 +929,16 @@ class ContentGenerator:
                 score_info["highest_priority_level"], score_info["matched_keywords"], original_tweet_text
             )
 
-            # 時間帯に応じた追加コメント
-            # astimezone()で実行環境のローカル時刻（本番はJST）に直す
-            hour = posted_at.astimezone().hour if posted_at is not None else datetime.now().hour
-            time_comment = self._get_time_based_comment(hour, score_info["score"])
+            # 時間帯に応じた追加コメント。専用コメントと疑問形のセリフには付けない
+            # （それだけで落ちているセリフに一言が重なり、語尾が2つ3つ並んでいたため）
+            if self.has_dedicated_quote_comment(score_info["matched_keywords"]) or base_comment.rstrip().endswith(
+                ("？", "?")
+            ):
+                time_comment = ""
+            else:
+                # astimezone()で実行環境のローカル時刻（本番はJST）に直す
+                hour = posted_at.astimezone().hour if posted_at is not None else datetime.now().hour
+                time_comment = self._get_time_based_comment(hour, score_info["score"])
 
             # 絵文字ルールを一元適用（🐻署名＋肉トピック時のみ🥩🍖）
             final_comment = self._decorate_comment(base_comment + time_comment, score_info["is_meat_topic"])
@@ -984,22 +999,29 @@ class ContentGenerator:
         return bool(self._dedicated_quote_comments(matched_keywords))
 
     def _get_time_based_comment(self, current_hour: int, priority_score: int) -> str:
-        """時間帯と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）"""
-        try:
-            base_time_comment = ""
+        """時間帯と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）
 
+        quote_comments.tsv に時間帯の一言（bucket が time_morning など）があればその中から選び、
+        なければここに書いてある文言を使う。
+        """
+        try:
             if self.MORNING_START <= current_hour < self.MORNING_END:
-                base_time_comment = " 朝から幸せね〜"
+                bucket, base_time_comment = "time_morning", " 朝から幸せね〜"
             elif self.LUNCH_START <= current_hour < self.LUNCH_END:
-                base_time_comment = " お昼にちょうどいいわね！"
+                bucket, base_time_comment = "time_lunch", " お昼にちょうどいいわね！"
             elif self.DINNER_START <= current_hour < self.DINNER_END:
-                base_time_comment = " 夜ご飯が楽しみだ！"
+                bucket, base_time_comment = "time_dinner", " 夜ご飯が楽しみだ！"
             else:
                 # 夜間や早朝の場合、優先度が高ければ特別コメント
+                bucket, base_time_comment = "time_other", ""
                 if priority_score >= 3:
                     base_time_comment = " 特別ね〜！"
                 elif priority_score >= 2:
                     base_time_comment = " たまらないわね！"
+
+            phrases = self._time_phrases.get(bucket)
+            if phrases:
+                return " " + random.choice(phrases)
 
             return base_time_comment
 

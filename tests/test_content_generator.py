@@ -284,3 +284,56 @@ class QuoteCommentTimePhraseTests(TestCase):
             self.generator.generate_quote_comment("ラーメン食べた", posted_at)
 
         self.assertEqual(time_phrase.call_args.args[0], posted_at.astimezone().hour)
+
+
+class QuoteTimePhraseAttachmentTests(TestCase):
+    """時間帯の一言は、専用コメントと疑問形のセリフには付けないことの確認
+    （それだけで落ちているセリフに一言が重なり、語尾が2つ3つ並んでいたための対応）"""
+
+    def setUp(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        self.generator = _make_generator()
+        self.generator._specific_keyword_comments = [("寿司", ["専用のセリフ！"])]
+        self.generator._medium_priority_comments = ["汎用のセリフ！"]
+        self.generator._time_phrases = {"time_lunch": ["お昼の一言"]}
+        self.noon = datetime(2026, 10, 12, 12, 0, tzinfo=timezone(timedelta(hours=9))).astimezone()
+
+    def test_dedicated_comment_gets_no_time_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("寿司たべた", self.noon)
+
+        self.assertEqual(comment, "🐻 専用のセリフ！")
+
+    def test_generic_comment_gets_the_time_phrase_from_the_file(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.noon)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ お昼の一言")
+
+    def test_question_comment_gets_no_time_phrase(self) -> None:
+        self.generator._medium_priority_comments = ["肉・・・？"]
+
+        comment = self.generator.generate_quote_comment("カレーたべた", self.noon)
+
+        self.assertEqual(comment, "🐻 肉・・・？")
+
+    def test_time_phrase_falls_back_to_the_built_in_one_when_the_file_has_none(self) -> None:
+        self.generator._time_phrases = {}
+
+        comment = self.generator.generate_quote_comment("カレーたべた", self.noon)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ お昼にちょうどいいわね！")
+
+    def test_time_phrase_buckets_are_loaded_from_the_file(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", encoding="utf-8", delete=False) as f:
+            f.write("bucket\tkeyword\ttext\n")
+            f.write("medium\t\t汎用のセリフ！\n")
+            f.write("time_dinner\t\t夜の一言A\n")
+            f.write("time_dinner\t\t夜の一言B\n")
+
+        with mock.patch.object(type(self.generator), "QUOTE_COMMENTS_FILE", f.name):
+            self.generator._load_quote_comments()
+
+        self.assertEqual(self.generator._time_phrases, {"time_dinner": ["夜の一言A", "夜の一言B"]})
