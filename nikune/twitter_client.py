@@ -292,15 +292,26 @@ class TwitterClient:
     @staticmethod
     def _wrap_tweets_with_author_username(tweets_response: Any) -> List[Any]:
         """
-        expansions=author_id付きレスポンスから、author_username付きの軽量オブジェクトに
-        ラップして返す
+        expansions=author_id,attachments.media_keys付きレスポンスから、author_usernameと
+        photo_urls（添付画像のURL。なければ空リスト）付きの軽量オブジェクトにラップして返す
 
         Note:
             tweepy.Tweetは__slots__を使用しており動的な属性追加ができないため、
             SimpleNamespaceに詰め替える。
         """
-        users = (tweets_response.includes or {}).get("users") or []
+        includes = tweets_response.includes or {}
+        users = includes.get("users") or []
         users_by_id = {user.id: user.username for user in users}
+        # 写真はurl、動画・GIFはpreview_image_url（サムネイル）に画像のURLが入る
+        image_url_by_media_key = {
+            media.media_key: getattr(media, "url", None) or getattr(media, "preview_image_url", None)
+            for media in includes.get("media") or []
+        }
+
+        def photo_urls(tweet: Any) -> List[str]:
+            media_keys = (getattr(tweet, "attachments", None) or {}).get("media_keys") or []
+            return [url for key in media_keys if (url := image_url_by_media_key.get(key))]
+
         return [
             SimpleNamespace(
                 id=tweet.id,
@@ -309,6 +320,7 @@ class TwitterClient:
                 author_username=users_by_id.get(tweet.author_id),
                 created_at=getattr(tweet, "created_at", None),
                 public_metrics=getattr(tweet, "public_metrics", None),
+                photo_urls=photo_urls(tweet),
             )
             for tweet in tweets_response.data
         ]
@@ -327,9 +339,10 @@ class TwitterClient:
             # タイムライン取得（引用URL組み立て用にauthor_usernameも取得）
             tweets = self.client.get_home_timeline(
                 max_results=max_results,
-                tweet_fields=["created_at", "author_id", "text", "public_metrics"],
-                expansions=["author_id"],
+                tweet_fields=["created_at", "author_id", "text", "public_metrics", "attachments"],
+                expansions=["author_id", "attachments.media_keys"],
                 user_fields=["username"],
+                media_fields=["type", "url", "preview_image_url"],
             )
 
             if tweets.data:
@@ -372,9 +385,10 @@ class TwitterClient:
             tweets = self.client.search_recent_tweets(
                 query=query,
                 max_results=max_results,
-                tweet_fields=["created_at", "author_id", "text", "public_metrics"],
-                expansions=["author_id"],
+                tweet_fields=["created_at", "author_id", "text", "public_metrics", "attachments"],
+                expansions=["author_id", "attachments.media_keys"],
                 user_fields=["username"],
+                media_fields=["type", "url", "preview_image_url"],
                 user_auth=False,
             )
 

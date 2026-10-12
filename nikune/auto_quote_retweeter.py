@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import (
     BOT_NAME,
+    PHOTO_CHECK_MAX_PER_RUN,
     QUOTE_RETWEET_HIGH_PRIORITY_LIMIT,
     QUOTE_RETWEET_MAX_PER_HOUR,
     QUOTE_RETWEET_MAX_TWEET_AGE_HOURS,
@@ -21,6 +22,7 @@ from config.settings import (
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.jev_checker import JevChecker
+from nikune.photo_checker import PhotoChecker
 from nikune.quote_safety import evaluate_quote_candidate
 from nikune.twitter_client import TwitterClient
 
@@ -52,7 +54,11 @@ class AutoQuoteRetweeter:
     """
 
     def __init__(
-        self, db_manager: DatabaseManager, dry_run: bool = False, jev_checker: Optional[JevChecker] = None
+        self,
+        db_manager: DatabaseManager,
+        dry_run: bool = False,
+        jev_checker: Optional[JevChecker] = None,
+        photo_checker: Optional[PhotoChecker] = None,
     ) -> None:
         """自動Quote Retweeterを初期化
 
@@ -60,10 +66,13 @@ class AutoQuoteRetweeter:
             jev_checker: 引用前の安全判定に使う Jev クライアント。省略時は設定（TYPESAFE_API_KEY）から生成し、
                 キー未設定なら判定なしで従来どおり動作する。dry_run でもキーがあれば Jev は実際に呼ぶ
                 （読み取りのみ・安価で、ドライランで判定結果を確認できるようにするため）
+            photo_checker: 候補の写真を見る Claude クライアント。省略時は設定（ANTHROPIC_API_KEY）から生成し、
+                キー未設定なら写真は見ず、本文だけで判定する
         """
         self.db_manager = db_manager
         self.dry_run = dry_run
         self.jev_checker = jev_checker if jev_checker is not None else JevChecker.from_settings()
+        self.photo_checker = photo_checker if photo_checker is not None else PhotoChecker.from_settings()
         self.twitter_client = TwitterClient(dry_run=dry_run)
         self.content_generator = ContentGenerator(db_manager)
         self.bot_name = BOT_NAME
@@ -146,6 +155,8 @@ class AutoQuoteRetweeter:
                 "skipped_too_old": 0,
                 "skipped_retweet": 0,
                 "skipped_no_fitting_comment": 0,
+                "photo_checked": 0,
+                "photo_unavailable": 0,
                 "skipped_by_jev": 0,
                 "jev_unavailable": 0,
                 "errors": [],
@@ -183,19 +194,11 @@ class AutoQuoteRetweeter:
             results["checked_tweets"] = len(timeline_tweets)
             logger.info(f"🔍 Checking {len(timeline_tweets)} tweets from timeline")
 
-            # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
-            # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
-            timeline_tweets = self._rank_candidates(timeline_tweets, search_tweet_ids)
-
-            # 各ツイートをチェック
+            # 引用できないもの（処理済み・引用済み・自分の投稿・リツイート・古いもの）を先に除く
             skipped_processed = 0
+            candidates: List[Any] = []
+            posted_times: Dict[Any, Optional[datetime]] = {}
             for tweet in timeline_tweets:
-                # 投稿するたびにレート制限を確認する（以前は実行開始時に1回確認するだけで、
-                # HIGH優先度の候補が続くと1回の実行で上限を超えて投稿していた）
-                if not self._can_quote_now():
-                    logger.info("⏰ Rate limit reached, stopping further quotes in this run")
-                    break
-
                 try:
                     # 既に処理済みかチェック（OrderedDictでO(1)検索・スレッドセーフ）
                     with self._processed_tweets_lock:
@@ -226,8 +229,35 @@ class AutoQuoteRetweeter:
                         logger.debug(f"⏭️ Too old to quote: {tweet.id} (posted {posted_at.isoformat()})")
                         continue
 
+                    candidates.append(tweet)
+                    posted_times[tweet.id] = posted_at
+
+                except Exception as e:
+                    error_msg = f"Error processing tweet {tweet.id}: {e}"
+                    logger.error(f"❌ {error_msg}")
+                    results["errors"].append(error_msg)
+
+            # 写真付きの候補は写真も見る（本文が店名や日付だけでも、何の料理か・肉が写っているかが分かる）
+            photo_keywords = self._check_photos(candidates, search_tweet_ids, results)
+
+            # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
+            # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
+            candidates = self._rank_candidates(candidates, search_tweet_ids, photo_keywords)
+
+            # 各ツイートをチェック
+            for tweet in candidates:
+                # 投稿するたびにレート制限を確認する（以前は実行開始時に1回確認するだけで、
+                # HIGH優先度の候補が続くと1回の実行で上限を超えて投稿していた）
+                if not self._can_quote_now():
+                    logger.info("⏰ Rate limit reached, stopping further quotes in this run")
+                    break
+
+                try:
+                    posted_at = posted_times[tweet.id]
+                    from_photo = photo_keywords.get(tweet.id, [])
+
                     # 食関連ツイートかチェック（お肉＋食・レストラン全般、優先度スコアリング対応）
-                    score_info = self.content_generator.get_food_keyword_score(tweet.text)
+                    score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo)
 
                     if score_info["is_food_related"]:
                         results["food_related_found"] += 1
@@ -243,7 +273,7 @@ class AutoQuoteRetweeter:
 
                         # 肉の話題でも、専用コメントのある食べ物でもないものは引用しない
                         # （「ランチ」等で拾った投稿に汎用の「肉ね！」を付けると的外れになる）
-                        if not self._candidate_tier(score_info) < self.TIER_NOT_QUOTABLE:
+                        if self._candidate_tier(score_info, from_photo) >= self.TIER_NOT_QUOTABLE:
                             results["skipped_no_fitting_comment"] += 1
                             logger.info("⏭️ Skipping: not a meat topic and no dedicated comment for it")
                             continue
@@ -275,7 +305,7 @@ class AutoQuoteRetweeter:
                             continue
 
                         # コメント生成（優先度対応版）
-                        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at)
+                        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at, from_photo)
 
                         if self.dry_run:
                             pseudo_url = f"https://x.com/{author_username or 'unknown'}/status/{tweet.id}"
@@ -327,6 +357,10 @@ class AutoQuoteRetweeter:
             # 処理結果のサマリーログ
             if skipped_processed > 0:
                 logger.info(f"📊 Skipped {skipped_processed} already processed tweets")
+            if results["photo_checked"] > 0 or results["photo_unavailable"] > 0:
+                logger.info(
+                    f"📷 Photos: checked {results['photo_checked']}, unavailable {results['photo_unavailable']}"
+                )
             if results["skipped_no_fitting_comment"] > 0:
                 logger.info(
                     f"📊 Skipped {results['skipped_no_fitting_comment']} food tweets "
@@ -346,32 +380,80 @@ class AutoQuoteRetweeter:
             return {"success": False, "error": error_msg}
 
     # 引用候補の優先順（小さいほど先）
-    TIER_MEAT = 0  # 肉の話題
-    TIER_DEDICATED_COMMENT = 1  # 肉ではないが、専用コメントのある食べ物（寿司・餃子など）
-    TIER_NOT_QUOTABLE = 2  # それ以外（引用しない）
+    TIER_MEAT_IN_PHOTO = 0  # 写真に肉が写っている
+    TIER_MEAT = 1  # 本文が肉の話題
+    TIER_DEDICATED_COMMENT = 2  # 肉ではないが、専用コメントのある食べ物（寿司・餃子など）
+    TIER_NOT_QUOTABLE = 3  # それ以外（引用しない）
 
-    def _candidate_tier(self, score_info: Dict[str, Any]) -> int:
-        """スコア情報から引用候補の優先順を決める"""
+    def _candidate_tier(self, score_info: Dict[str, Any], from_photo: List[str]) -> int:
+        """スコア情報と写真から分かったキーワードから、引用候補の優先順を決める"""
         if not score_info["is_food_related"]:
             return self.TIER_NOT_QUOTABLE
+        if self.content_generator.PHOTO_MEAT_KEYWORD in from_photo:
+            return self.TIER_MEAT_IN_PHOTO
         if score_info["is_meat_topic"]:
             return self.TIER_MEAT
         if self.content_generator.has_dedicated_quote_comment(score_info["matched_keywords"]):
             return self.TIER_DEDICATED_COMMENT
         return self.TIER_NOT_QUOTABLE
 
-    def _rank_candidates(self, tweets: List[Any], search_tweet_ids: set[Any]) -> List[Any]:
-        """引用候補を「肉の話題 → 専用コメントのある食べ物 → それ以外」の順に並べ替える
+    def _rank_candidates(
+        self, tweets: List[Any], search_tweet_ids: set[Any], photo_keywords: Dict[Any, List[str]]
+    ) -> List[Any]:
+        """引用候補を「写真に肉 → 本文が肉の話題 → 専用コメントのある食べ物 → それ以外」の順に並べ替える
 
         同じ順位の中では、フォロー中タイムラインの投稿を検索APIの投稿より先にし、
         それ以外は元の並び（新しい順）を保つ。
         """
 
         def sort_key(tweet: Any) -> tuple[int, bool]:
-            score_info = self.content_generator.get_food_keyword_score(tweet.text)
-            return (self._candidate_tier(score_info), tweet.id in search_tweet_ids)
+            from_photo = photo_keywords.get(tweet.id, [])
+            score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo)
+            return (self._candidate_tier(score_info, from_photo), tweet.id in search_tweet_ids)
 
         return sorted(tweets, key=sort_key)
+
+    def _check_photos(
+        self, candidates: List[Any], search_tweet_ids: set[Any], results: Dict[str, Any]
+    ) -> Dict[Any, List[str]]:
+        """写真付きの候補の1枚目を見て、写真から分かったキーワードを返す（ツイートID → キーワード）
+
+        写真に肉が写っていれば PHOTO_MEAT_KEYWORD を、料理名が分かればそのキーワードを入れる。
+        食べ物の写真でなかった候補・判定できなかった候補・写真のない候補はキーに含めない
+        （本文だけのルールで扱う）。見るのは1回の実行で PHOTO_CHECK_MAX_PER_RUN 件まで。
+        """
+        photo_keywords: Dict[Any, List[str]] = {}
+        if not self.photo_checker.enabled:
+            return photo_keywords
+
+        dish_keywords = self.content_generator.photo_dish_keywords
+        attempts = 0
+        for tweet in candidates:
+            photo_urls = getattr(tweet, "photo_urls", None) or []
+            if not photo_urls:
+                continue
+            if attempts >= PHOTO_CHECK_MAX_PER_RUN:
+                break
+            attempts += 1
+
+            verdict = self.photo_checker.check(photo_urls[0], dish_keywords)
+            if verdict is None:
+                results["photo_unavailable"] += 1
+                continue
+
+            results["photo_checked"] += 1
+            keywords = list(verdict.dishes)
+            if verdict.shows_meat:
+                keywords.append(self.content_generator.PHOTO_MEAT_KEYWORD)
+            source = "search" if tweet.id in search_tweet_ids else "timeline"
+            logger.info(
+                f"📷 Photo check: tweet={tweet.id} source={source} food={verdict.is_food} "
+                f"meat={verdict.shows_meat} dishes={verdict.dishes} model={verdict.model}"
+            )
+            if keywords:
+                photo_keywords[tweet.id] = keywords
+
+        return photo_keywords
 
     def _restore_rate_limit_state(self) -> None:
         """DBの引用RT履歴から、直近の投稿をレート制限の状態（最終投稿時刻・1時間内の投稿）に反映する"""
