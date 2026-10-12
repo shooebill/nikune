@@ -11,6 +11,7 @@ DatabaseManager（SQLite + Redis）に関する回帰テスト
 """
 
 import sqlite3
+from datetime import datetime
 from typing import Any, Iterable, List, Optional, Set, cast
 from unittest import TestCase, mock
 
@@ -261,3 +262,41 @@ class AvoidRecentTemplateTests(TestCase):
 
         self.assertNotIn("セリフA", picked)
         self.assertEqual(db.get_recent_post_texts(limit=5), ["セリフA"])
+
+
+class TimeLimitedToneTests(TestCase):
+    """トーンが「朝活」「夜更かし」のセリフは、その時間帯の回にだけ選ばれることの確認"""
+
+    def _db(self) -> DatabaseManager:
+        db = _make_db_manager_without_connections()
+        db.redis_client = cast(Any, FakeCooldownRedis())
+        db.add_template("日常", "朝活", "朝のセリフ")
+        db.add_template("日常", "夜更かし", "夜のセリフ")
+        db.add_template("お肉", "元気", "いつでものセリフ")
+        return db
+
+    def _picked_at(self, db: DatabaseManager, hour: int) -> Set[str]:
+        now = datetime(2026, 10, 12, hour, 0)
+        return {db.get_available_template(now=now)["template"] for _ in range(40)}  # type: ignore[index]
+
+    def test_morning_run_can_pick_morning_lines_but_not_night_lines(self) -> None:
+        self.assertEqual(self._picked_at(self._db(), 9), {"朝のセリフ", "いつでものセリフ"})
+
+    def test_afternoon_run_picks_only_unrestricted_lines(self) -> None:
+        self.assertEqual(self._picked_at(self._db(), 15), {"いつでものセリフ"})
+
+    def test_evening_run_can_pick_night_lines_but_not_morning_lines(self) -> None:
+        self.assertEqual(self._picked_at(self._db(), 19), {"夜のセリフ", "いつでものセリフ"})
+
+    def test_explicit_tone_ignores_the_time_limit(self) -> None:
+        template = self._db().get_available_template(tone="朝活", now=datetime(2026, 10, 12, 19, 0))
+
+        assert template is not None
+        self.assertEqual(template["template"], "朝のセリフ")
+
+    def test_no_line_for_the_hour_returns_none(self) -> None:
+        db = _make_db_manager_without_connections()
+        db.redis_client = cast(Any, FakeCooldownRedis())
+        db.add_template("日常", "朝活", "朝のセリフ")
+
+        self.assertIsNone(db.get_available_template(now=datetime(2026, 10, 12, 15, 0)))

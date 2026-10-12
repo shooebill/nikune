@@ -91,6 +91,14 @@ def _load_ng_keywords() -> list[str]:
 NG_KEYWORDS = _load_ng_keywords()
 
 # 時間帯判定用設定（調整可能）
+# 独り言ツイートで、出してよい時間帯が決まっているトーン（トーン名 → 出してよい「時」）
+# シートの tweet_templates タブで tone 列をこの名前にしたセリフは、その時間帯の回にだけ選ばれる。
+# ここにないトーンのセリフは、どの回でも選ばれる
+TIME_LIMITED_TONES: dict[str, frozenset[int]] = {
+    "朝活": frozenset(range(5, 11)),  # 5時〜10時台（9:00の回）
+    "夜更かし": frozenset([18, 19, 20, 21, 22, 23, 0, 1, 2, 3]),  # 18時〜翌3時台（19:00の回）
+}
+
 TIME_SETTINGS = {
     "MORNING_START": 6,
     "MORNING_END": 10,
