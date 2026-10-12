@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import redis
 
-from config.settings import BOT_NAME
+from config.settings import BOT_NAME, TIME_LIMITED_TONES
 
 # 独り言ツイートのセリフ選び（get_available_template）
 # 直近に使ったセリフのうち、候補全体のこの割合にあたる本数を避ける
@@ -25,6 +25,8 @@ SIMILAR_LOOKBACK = 3
 # 「ほぼ同じ文」とみなす一致度（difflib）。一語だけ入れ替えた長いセリフや、語尾だけ違うセリフが当たる。
 # 「肉ね！」「うお肉ね！」のような短い連作（0.75）は当たらない値にしている
 SIMILARITY_THRESHOLD = 0.85
+# 時間帯の制限がないトーンのセリフを出してよい「時」（＝いつでも）
+ALL_HOURS = frozenset(range(24))
 
 # ログ設定
 # ロギングの基本設定（ハンドラ・フォーマット）はエントリポイント（main.py）側で行う。
@@ -411,6 +413,7 @@ class DatabaseManager:
         category: Optional[str] = None,
         tone: Optional[str] = None,
         max_attempts: int = 10,
+        now: Optional[datetime] = None,
     ) -> Optional[Dict[str, str]]:
         """
         使用可能なテンプレートを取得（最近使ったセリフ・それに似たセリフを避ける）
@@ -419,21 +422,26 @@ class DatabaseManager:
         同じセリフが28時間後に戻ってきたり、ほぼ同じ文が続けて出たりしていた。
         今は次の順に候補を絞り、残った中からランダムに選ぶ:
 
+            0. 今の時間帯に出せないセリフ（TIME_LIMITED_TONES のトーンで、時間帯が外れているもの）を外す
             1. 直近に使ったセリフ（候補全体の RECENT_AVOID_RATIO にあたる本数）を外す
             2. 直近 SIMILAR_LOOKBACK 回の投稿とほぼ同じ文（一部だけ違うセリフ）を外す
 
-        候補がなくなったら 2 → 1 の順に条件をゆるめる。24時間のクールダウン（Redis）は
-        従来どおり最後に確認する。
+        候補がなくなったら 2 → 1 の順に条件をゆるめる（0 はゆるめない）。24時間のクールダウン
+        （Redis）は従来どおり最後に確認する。
 
         Args:
             category: カテゴリでフィルタ
-            tone: トーンでフィルタ
+            tone: トーンでフィルタ。明示したときは時間帯の制限をかけない（手動で試せるように）
             max_attempts: クールダウン中だったときに選び直す最大回数
+            now: 時間帯の判定に使う時刻（省略時は現在時刻）
 
         Returns:
             使用可能なテンプレート
         """
         templates = self.get_templates(category, tone, active_only=True)
+        if tone is None:
+            hour = (now or datetime.now()).hour
+            templates = [t for t in templates if hour in TIME_LIMITED_TONES.get(t["tone"], ALL_HOURS)]
         if not templates:
             logger.warning("⚠️ No templates found")
             return None
