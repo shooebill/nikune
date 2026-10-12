@@ -6,13 +6,25 @@ SQLite（マスタデータ）とRedis（動的データ）を統合管理
 import csv
 import logging
 import os
+import random
 import sqlite3
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
 import redis
 
 from config.settings import BOT_NAME
+
+# 独り言ツイートのセリフ選び（get_available_template）
+# 直近に使ったセリフのうち、候補全体のこの割合にあたる本数を避ける
+# （19本・1日3回なら直近11本を避けるので、同じセリフは早くても4日後）
+RECENT_AVOID_RATIO = 0.6
+# 直近この回数の投稿と「ほぼ同じ文」のセリフも避ける
+SIMILAR_LOOKBACK = 3
+# 「ほぼ同じ文」とみなす一致度（difflib）。一語だけ入れ替えた長いセリフや、語尾だけ違うセリフが当たる。
+# 「肉ね！」「うお肉ね！」のような短い連作（0.75）は当たらない値にしている
+SIMILARITY_THRESHOLD = 0.85
 
 # ログ設定
 # ロギングの基本設定（ハンドラ・フォーマット）はエントリポイント（main.py）側で行う。
@@ -125,6 +137,19 @@ class DatabaseManager:
         """
         )
 
+        # 独り言ツイートの履歴テーブル（最近使ったセリフを避けて選ぶために使う。--setup-db でも消さない。
+        # テンプレートを入れ直すとIDが変わるので、セリフの本文も持っておく）
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS post_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL,
+                template_text TEXT NOT NULL,
+                posted_at TEXT NOT NULL
+            )
+        """
+        )
+
         self.sqlite_conn.commit()
         logger.info("✅ SQLite tables created")
 
@@ -215,8 +240,6 @@ class DatabaseManager:
             logger.warning("⚠️ No templates found")
             return None
 
-        import random
-
         template = random.choice(templates)
 
         logger.info(f"🎲 Random template selected: ID={template['id']}, Category={template['category']}")
@@ -267,6 +290,28 @@ class DatabaseManager:
             for row in cursor.fetchall()
         ]
 
+    # ===== 独り言ツイートの履歴（SQLite） =====
+
+    def record_post(self, template_id: int, posted_at: Optional[datetime] = None) -> None:
+        """投稿したテンプレートを履歴に記録する（テンプレートが見つからなければ何もしない）"""
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("SELECT template FROM tweet_templates WHERE id = ?", (template_id,))
+        row = cursor.fetchone()
+        if row is None:
+            logger.warning(f"⚠️ Template {template_id} not found, post history not recorded")
+            return
+        cursor.execute(
+            "INSERT INTO post_history (template_id, template_text, posted_at) VALUES (?, ?, ?)",
+            (template_id, row["template"], (posted_at or datetime.now()).isoformat()),
+        )
+        self.sqlite_conn.commit()
+
+    def get_recent_post_texts(self, limit: int) -> List[str]:
+        """最近投稿したセリフ（テンプレートの本文）を新しい順に返す"""
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute("SELECT template_text FROM post_history ORDER BY id DESC LIMIT ?", (limit,))
+        return [str(row["template_text"]) for row in cursor.fetchall()]
+
     # ===== 動的データ管理（Redis） =====
 
     def record_tweet_usage(self, template_id: int, tweet_text: str, ttl_hours: int = 24) -> None:
@@ -278,6 +323,12 @@ class DatabaseManager:
             tweet_text: 実際のツイート内容
             ttl_hours: 記録保持時間（時間）
         """
+        # 最近使ったセリフを避けるための履歴（SQLite）。Redisの記録に失敗しても残るよう先に書く
+        try:
+            self.record_post(template_id)
+        except Exception as e:
+            logger.error(f"❌ Failed to record post history: {e}")
+
         try:
             # 使用履歴を記録
             key = f"tweet_history:{template_id}:{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -362,22 +413,36 @@ class DatabaseManager:
         max_attempts: int = 10,
     ) -> Optional[Dict[str, str]]:
         """
-        使用可能なテンプレートを取得（重複防止付き）
+        使用可能なテンプレートを取得（最近使ったセリフ・それに似たセリフを避ける）
+
+        以前は「全体からランダムに選び、24時間以内に使ったものだけ引き直す」方式で、
+        同じセリフが28時間後に戻ってきたり、ほぼ同じ文が続けて出たりしていた。
+        今は次の順に候補を絞り、残った中からランダムに選ぶ:
+
+            1. 直近に使ったセリフ（候補全体の RECENT_AVOID_RATIO にあたる本数）を外す
+            2. 直近 SIMILAR_LOOKBACK 回の投稿とほぼ同じ文（一部だけ違うセリフ）を外す
+
+        候補がなくなったら 2 → 1 の順に条件をゆるめる。24時間のクールダウン（Redis）は
+        従来どおり最後に確認する。
 
         Args:
             category: カテゴリでフィルタ
             tone: トーンでフィルタ
-            max_attempts: 最大試行回数
+            max_attempts: クールダウン中だったときに選び直す最大回数
 
         Returns:
             使用可能なテンプレート
         """
-        for attempt in range(max_attempts):
-            template = self.get_random_template(category, tone)
+        templates = self.get_templates(category, tone, active_only=True)
+        if not templates:
+            logger.warning("⚠️ No templates found")
+            return None
 
-            if not template:
-                break
+        candidates = self._templates_avoiding_recent(templates)
+        random.shuffle(candidates)
 
+        for template in candidates[:max_attempts]:
+            logger.info(f"🎲 Random template selected: ID={template['id']}, Category={template['category']}")
             if self.can_use_template(int(template["id"])):
                 return template
 
@@ -385,6 +450,28 @@ class DatabaseManager:
 
         logger.warning("⚠️ No available templates found after max attempts")
         return None
+
+    def _templates_avoiding_recent(self, templates: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """最近使ったセリフと、直近の投稿に似たセリフを外した候補を返す（空になるなら条件をゆるめる）"""
+        # 同じセリフが何度か出ていても avoid_count 種類ぶん遡れるよう、多めに読む
+        recent = self.get_recent_post_texts(limit=len(templates) * 3)
+        avoid_count = int(len(templates) * RECENT_AVOID_RATIO)
+        recently_used = set(list(dict.fromkeys(recent))[:avoid_count])
+        last_posts = recent[:SIMILAR_LOOKBACK]
+
+        def too_similar(text: str) -> bool:
+            return any(SequenceMatcher(None, text, last).ratio() >= SIMILARITY_THRESHOLD for last in last_posts)
+
+        not_recent = [t for t in templates if t["template"] not in recently_used]
+        not_similar = [t for t in not_recent if not too_similar(t["template"])]
+
+        skipped = len(templates) - len(not_similar)
+        if not_similar:
+            logger.info(f"🧹 Avoiding {skipped} recently used or similar templates ({len(not_similar)} left)")
+            return not_similar
+        if not_recent:
+            return not_recent
+        return list(templates)
 
     # ===== スプレッドシート連携 =====
 
