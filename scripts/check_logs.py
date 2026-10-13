@@ -19,6 +19,7 @@ cron から起動し、その回のログを読んで異常があるときだけ
     - TypeSafe でチェックできなかった（投稿: decision=UNCHECKED、引用RT: decision=UNAVAILABLE）
     - TypeSafe のキーが設定されていない（投稿: decision=DISABLED。本番にはキーがあるので設定漏れ）
     - Jev の警告（投稿: decision=WARN）
+    - Claude で写真・セリフを判定できなかった（引用RT。クレジット切れ・API の障害など）
 
 主な環境変数:
     - NIKUNE_LOG_DIR:
@@ -66,6 +67,13 @@ FAILURE_MARKERS = (
     "❌ Failed to post tweet",
     "❌ Quote retweet check failed:",
 )
+
+# Claude で写真・セリフを判定できなかったときの行（nikune/photo_checker.py が出す）
+CLAUDE_UNAVAILABLE_MARKERS = (
+    "📷 Photo check unavailable",
+    "📷 Comment check unavailable",
+)
+CLAUDE_UNAVAILABLE_REASON = "Claude で写真・セリフを判定できませんでした"
 
 # 通知文に載せる前に伏せ字にする秘密情報のパターン
 _SECRET_PATTERNS = (
@@ -213,6 +221,9 @@ def check_log(target: Target, log_path: Path, start: datetime, end: datetime) ->
         level = match.group(3) if match else None
         if level == "ERROR" or line.startswith("Traceback") or any(marker in line for marker in FAILURE_MARKERS):
             result.add("失敗の記録があります")
+            evidence_index.add(index)
+        if any(marker in line for marker in CLAUDE_UNAVAILABLE_MARKERS):
+            result.add(CLAUDE_UNAVAILABLE_REASON)
             evidence_index.add(index)
         if target.jev_marker in line:
             decision = _decision(line)

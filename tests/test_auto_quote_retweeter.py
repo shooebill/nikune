@@ -612,11 +612,15 @@ class CommentCheckTests(TestCase):
         self.assertEqual(post.call_args.args[0], "t2")
         self.assertEqual(results["quote_posted"], 1)
 
-    def test_selected_comment_is_used_when_the_check_is_unavailable(self) -> None:
-        results, post, _ = self._run([None], [_food_tweet("t1", "焼き鳥たべた")])
+    def test_nothing_is_quoted_when_the_check_is_unavailable(self) -> None:
+        timeline = [_food_tweet("t1", "焼き鳥たべた"), _food_tweet("t2", "寿司たべた")]
 
-        self.assertIn(self.DEDICATED, post.call_args.args[2])
-        self.assertEqual(results["quote_posted"], 1)
+        results, post, photo_checker = self._run([None], timeline)
+
+        post.assert_not_called()
+        self.assertEqual(results["comment_check_unavailable"], 1)
+        self.assertEqual(results["skipped_comment_mismatch"], 0)
+        self.assertEqual(photo_checker.comment_fits.call_count, 1)
 
     def test_run_stops_when_the_check_limit_is_reached(self) -> None:
         timeline = [_food_tweet("t1", "寿司ではなかった"), _food_tweet("t2", "寿司たべた")]
@@ -628,7 +632,7 @@ class CommentCheckTests(TestCase):
 
     def test_no_check_is_made_without_a_key(self) -> None:
         retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
-        results: Dict[str, Any] = {"comment_checks": 0}
+        results: Dict[str, Any] = {"comment_checks": 0, "comment_check_unavailable": 0}
         score_info = retweeter.content_generator.get_food_keyword_score("焼肉たべた")
 
         comment = retweeter._fitting_comment(_food_tweet("t1", "焼肉たべた"), None, [], score_info, results)

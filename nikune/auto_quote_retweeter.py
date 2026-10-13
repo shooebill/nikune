@@ -158,6 +158,7 @@ class AutoQuoteRetweeter:
                 "skipped_no_fitting_comment": 0,
                 "skipped_comment_mismatch": 0,
                 "comment_checks": 0,
+                "comment_check_unavailable": 0,
                 "photo_checked": 0,
                 "photo_unavailable": 0,
                 "skipped_by_jev": 0,
@@ -312,6 +313,11 @@ class AutoQuoteRetweeter:
                             logger.info("⏹️ Comment check limit reached, stopping further quotes in this run")
                             break
                         comment = self._fitting_comment(tweet, posted_at, from_photo, score_info, results)
+                        if results["comment_check_unavailable"] > 0:
+                            # 確かめられないセリフは投稿しない。障害はほかの候補でも同じなので、この回はここで終える。
+                            # 一時的な障害で候補を失わないよう処理済みにはしない
+                            logger.warning("⏹️ Comment check unavailable, not quoting in this run")
+                            break
                         if comment is None:
                             # 合うセリフがない候補は処理済みにして、同じプロセス内で再問い合わせしない
                             results["skipped_comment_mismatch"] += 1
@@ -486,7 +492,8 @@ class AutoQuoteRetweeter:
         セリフはキーワードの一致で選んでいて、文の意味は見ていない（「豚肉なのに『やきとり』と呼ぶ」という
         投稿に、鶏肉と言い切る焼き鳥のセリフを付けたことがあった）。選んだセリフを Claude に見せ、
         食い違っていたら汎用の文言で選び直す。汎用の文言は肉のセリフなので、肉の話題でなければ選び直さない。
-        判定できなかったとき（キー未設定・API失敗）は、選んだセリフをそのまま使う。
+        キーが未設定の環境では照合せず、選んだセリフをそのまま使う。キーがあるのに判定できなかったとき
+        （API失敗・クレジット切れ）は results["comment_check_unavailable"] を増やして None を返す。
         """
         comment = self.content_generator.generate_quote_comment(tweet.text, posted_at, from_photo)
         if not self.photo_checker.enabled:
@@ -506,7 +513,8 @@ class AutoQuoteRetweeter:
             results["comment_checks"] += 1
             verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
             if verdict is None:
-                return comment
+                results["comment_check_unavailable"] += 1
+                return None
             logger.info(f"🗣️ Comment check: tweet={tweet.id} fits={verdict.fits} reason={verdict.reason}")
             if verdict.fits:
                 return comment
