@@ -58,6 +58,8 @@ PHOTO_CHECK_MODEL = (os.getenv("PHOTO_CHECK_MODEL") or "").strip() or "claude-op
 PHOTO_CHECK_TIMEOUT_SECONDS = float(os.getenv("PHOTO_CHECK_TIMEOUT_SECONDS", "30"))
 # 1回の実行で写真を見る候補の上限（費用の上限。1候補につき見る写真は1枚目だけ）
 PHOTO_CHECK_MAX_PER_RUN = int(os.getenv("PHOTO_CHECK_MAX_PER_RUN", "5"))
+# セリフが投稿の内容と食い違っていないかを確かめる回数の上限（1回の実行あたり。超えたらその回は引用しない）
+COMMENT_CHECK_MAX_PER_RUN = int(os.getenv("COMMENT_CHECK_MAX_PER_RUN", "6"))
 
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）

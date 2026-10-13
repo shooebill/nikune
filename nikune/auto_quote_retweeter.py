@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from config.settings import (
     BOT_NAME,
+    COMMENT_CHECK_MAX_PER_RUN,
     PHOTO_CHECK_MAX_PER_RUN,
     QUOTE_RETWEET_HIGH_PRIORITY_LIMIT,
     QUOTE_RETWEET_MAX_PER_HOUR,
@@ -155,6 +156,8 @@ class AutoQuoteRetweeter:
                 "skipped_too_old": 0,
                 "skipped_retweet": 0,
                 "skipped_no_fitting_comment": 0,
+                "skipped_comment_mismatch": 0,
+                "comment_checks": 0,
                 "photo_checked": 0,
                 "photo_unavailable": 0,
                 "skipped_by_jev": 0,
@@ -304,8 +307,18 @@ class AutoQuoteRetweeter:
                             self._cleanup_old_processed_tweets()
                             continue
 
-                        # コメント生成（優先度対応版）
-                        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at, from_photo)
+                        # コメント生成（優先度対応版）。投稿の内容と食い違うセリフは使わない
+                        if results["comment_checks"] >= COMMENT_CHECK_MAX_PER_RUN:
+                            logger.info("⏹️ Comment check limit reached, stopping further quotes in this run")
+                            break
+                        comment = self._fitting_comment(tweet, posted_at, from_photo, score_info, results)
+                        if comment is None:
+                            # 合うセリフがない候補は処理済みにして、同じプロセス内で再問い合わせしない
+                            results["skipped_comment_mismatch"] += 1
+                            with self._processed_tweets_lock:
+                                self.processed_tweets[tweet.id] = datetime.now()
+                            self._cleanup_old_processed_tweets()
+                            continue
 
                         if self.dry_run:
                             pseudo_url = f"https://x.com/{author_username or 'unknown'}/status/{tweet.id}"
@@ -365,6 +378,11 @@ class AutoQuoteRetweeter:
                 logger.info(
                     f"📊 Skipped {results['skipped_no_fitting_comment']} food tweets "
                     "that are not about meat and have no dedicated comment"
+                )
+            if results["skipped_comment_mismatch"] > 0:
+                logger.info(
+                    f"📊 Skipped {results['skipped_comment_mismatch']} food tweets "
+                    "(every comment contradicted the post)"
                 )
             if results["skipped_too_old"] > 0 or results["skipped_retweet"] > 0:
                 logger.info(
@@ -436,7 +454,7 @@ class AutoQuoteRetweeter:
                 break
             attempts += 1
 
-            verdict = self.photo_checker.check(photo_urls[0], dish_keywords)
+            verdict = self.photo_checker.check(photo_urls[0], dish_keywords, tweet.text)
             if verdict is None:
                 results["photo_unavailable"] += 1
                 continue
@@ -454,6 +472,45 @@ class AutoQuoteRetweeter:
                 photo_keywords[tweet.id] = keywords
 
         return photo_keywords
+
+    def _fitting_comment(
+        self,
+        tweet: Any,
+        posted_at: Optional[datetime],
+        from_photo: List[str],
+        score_info: Dict[str, Any],
+        results: Dict[str, Any],
+    ) -> Optional[str]:
+        """投稿の内容と食い違わないセリフを返す。合うものがなければ None
+
+        セリフはキーワードの一致で選んでいて、文の意味は見ていない（「豚肉なのに『やきとり』と呼ぶ」という
+        投稿に、鶏肉と言い切る焼き鳥のセリフを付けたことがあった）。選んだセリフを Claude に見せ、
+        食い違っていたら汎用の文言で選び直す。汎用の文言は肉のセリフなので、肉の話題でなければ選び直さない。
+        判定できなかったとき（キー未設定・API失敗）は、選んだセリフをそのまま使う。
+        """
+        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at, from_photo)
+        if not self.photo_checker.enabled:
+            return comment
+
+        photo_urls = getattr(tweet, "photo_urls", None) or []
+        photo_url = photo_urls[0] if photo_urls else None
+
+        # 1本目は選ばれたセリフ、2本目は専用コメントを使わない汎用の文言
+        for attempt in range(2):
+            if attempt == 1:
+                if not score_info["is_meat_topic"]:
+                    return None
+                comment = self.content_generator.generate_quote_comment(
+                    tweet.text, posted_at, from_photo, use_dedicated=False
+                )
+            results["comment_checks"] += 1
+            verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
+            if verdict is None:
+                return comment
+            logger.info(f"🗣️ Comment check: tweet={tweet.id} fits={verdict.fits} reason={verdict.reason}")
+            if verdict.fits:
+                return comment
+        return None
 
     def _restore_rate_limit_state(self) -> None:
         """DBの引用RT履歴から、直近の投稿をレート制限の状態（最終投稿時刻・1時間内の投稿）に反映する"""

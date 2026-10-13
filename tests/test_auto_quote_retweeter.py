@@ -4,7 +4,7 @@ from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.jev_checker import JevChecker
-from nikune.photo_checker import PhotoChecker, PhotoVerdict
+from nikune.photo_checker import CommentVerdict, PhotoChecker, PhotoVerdict
 from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decide, is_uncertain
 from nikune.twitter_client import TwitterClient
 
@@ -475,7 +475,10 @@ class PhotoCheckTests(TestCase):
     ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
         photo_checker = mock.MagicMock(spec=PhotoChecker)
         photo_checker.enabled = True
-        photo_checker.check.side_effect = lambda url, dishes: verdicts.get(url.rsplit("/", 1)[-1].removesuffix(".jpg"))
+        photo_checker.check.side_effect = lambda url, dishes, text: verdicts.get(
+            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        )
+        photo_checker.comment_fits.return_value = CommentVerdict(fits=True, reason="ok")
         retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True, photo_checker=photo_checker)
         retweeter.dry_run = False
         retweeter.content_generator._specific_keyword_comments = [("寿司", ["テスト用の専用コメント"])]
@@ -538,3 +541,97 @@ class PhotoCheckTests(TestCase):
 
         self.assertFalse(retweeter.photo_checker.enabled)
         self.assertEqual(retweeter._check_photos([_photo_tweet("t1", "焼肉")], set(), {}), {})
+
+
+class CommentCheckTests(TestCase):
+    """選んだセリフが投稿の内容と食い違うときは、選び直すか引用を見送ることの確認"""
+
+    DEDICATED = "テスト用の専用コメント"
+
+    def _run(
+        self, fits: list[Any], timeline: list[SimpleNamespace], max_checks: int = 6
+    ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
+        photo_checker = mock.MagicMock(spec=PhotoChecker)
+        photo_checker.enabled = True
+        photo_checker.check.return_value = None
+        photo_checker.comment_fits.side_effect = [
+            None if fit is None else CommentVerdict(fits=fit, reason="test") for fit in fits
+        ]
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True, photo_checker=photo_checker)
+        retweeter.dry_run = False
+        retweeter.content_generator._specific_keyword_comments = [
+            ("焼き鳥", [self.DEDICATED]),
+            ("寿司", [self.DEDICATED]),
+        ]
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+            mock.patch("nikune.auto_quote_retweeter.COMMENT_CHECK_MAX_PER_RUN", max_checks),
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return results, post, photo_checker
+
+    def test_fitting_comment_is_posted_as_selected(self) -> None:
+        tweet = _photo_tweet("t1", "焼き鳥たべた")
+
+        results, post, photo_checker = self._run([True], [tweet])
+
+        self.assertIn(self.DEDICATED, post.call_args.args[2])
+        self.assertEqual(results["comment_checks"], 1)
+        comment, text, photo_url = photo_checker.comment_fits.call_args.args
+        self.assertIn(self.DEDICATED, comment)
+        self.assertEqual(text, "焼き鳥たべた")
+        self.assertEqual(photo_url, "https://example.com/t1.jpg")
+
+    def test_mismatched_dedicated_comment_is_replaced_with_a_generic_one(self) -> None:
+        results, post, _ = self._run([False, True], [_food_tweet("t1", "豚肉なのに焼き鳥と呼ぶ")])
+
+        self.assertEqual(results["quote_posted"], 1)
+        self.assertNotIn(self.DEDICATED, post.call_args.args[2])
+        self.assertEqual(results["comment_checks"], 2)
+
+    def test_tweet_is_skipped_when_no_comment_fits(self) -> None:
+        results, post, _ = self._run([False, False], [_food_tweet("t1", "豚肉なのに焼き鳥と呼ぶ")])
+
+        post.assert_not_called()
+        self.assertEqual(results["skipped_comment_mismatch"], 1)
+
+    def test_non_meat_tweet_is_skipped_without_trying_a_generic_comment(self) -> None:
+        results, post, _ = self._run([False], [_food_tweet("t1", "寿司ではなかった")])
+
+        post.assert_not_called()
+        self.assertEqual(results["comment_checks"], 1)
+        self.assertEqual(results["skipped_comment_mismatch"], 1)
+
+    def test_next_candidate_is_tried_after_a_skip(self) -> None:
+        timeline = [_food_tweet("t1", "寿司ではなかった"), _food_tweet("t2", "寿司たべた")]
+
+        results, post, _ = self._run([False, True], timeline)
+
+        self.assertEqual(post.call_args.args[0], "t2")
+        self.assertEqual(results["quote_posted"], 1)
+
+    def test_selected_comment_is_used_when_the_check_is_unavailable(self) -> None:
+        results, post, _ = self._run([None], [_food_tweet("t1", "焼き鳥たべた")])
+
+        self.assertIn(self.DEDICATED, post.call_args.args[2])
+        self.assertEqual(results["quote_posted"], 1)
+
+    def test_run_stops_when_the_check_limit_is_reached(self) -> None:
+        timeline = [_food_tweet("t1", "寿司ではなかった"), _food_tweet("t2", "寿司たべた")]
+
+        results, post, photo_checker = self._run([False], timeline, max_checks=1)
+
+        post.assert_not_called()
+        self.assertEqual(photo_checker.comment_fits.call_count, 1)
+
+    def test_no_check_is_made_without_a_key(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+        results: Dict[str, Any] = {"comment_checks": 0}
+        score_info = retweeter.content_generator.get_food_keyword_score("焼肉たべた")
+
+        comment = retweeter._fitting_comment(_food_tweet("t1", "焼肉たべた"), None, [], score_info, results)
+
+        self.assertTrue(comment)
+        self.assertEqual(results["comment_checks"], 0)

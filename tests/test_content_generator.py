@@ -304,6 +304,13 @@ class QuoteTimePhraseAttachmentTests(TestCase):
 
         self.assertEqual(comment, "🐻 専用のセリフ！")
 
+    def test_dedicated_comment_can_be_turned_off(self) -> None:
+        self.generator._high_priority_comments = ["汎用のセリフ！"]
+
+        comment = self.generator.generate_quote_comment("寿司たべた", self.noon, use_dedicated=False)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ お昼の一言")
+
     def test_generic_comment_gets_the_time_phrase_from_the_file(self) -> None:
         comment = self.generator.generate_quote_comment("カレーたべた", self.noon)
 
