@@ -908,6 +908,7 @@ class ContentGenerator:
         original_tweet_text: str,
         posted_at: Optional[datetime] = None,
         extra_keywords: Optional[List[str]] = None,
+        use_dedicated: bool = True,
     ) -> str:
         """食関連ツイート用のコメント生成（優先度対応版）
 
@@ -915,6 +916,8 @@ class ContentGenerator:
             posted_at: 元ツイートの投稿時刻（タイムゾーン付き）。時間帯の一言はこの時刻で決める
                 （夜の投稿に朝のあいさつを付けないため）。省略時は現在時刻を使う
             extra_keywords: 本文以外から分かったキーワード（写真に写っていた料理など）
+            use_dedicated: False にすると専用コメントを使わず、汎用の文言から選ぶ
+                （専用コメントが投稿の内容と食い違ったときの選び直し用）
         """
         try:
             # キーワードの優先度スコアを取得
@@ -925,15 +928,16 @@ class ContentGenerator:
                 return self._decorate_comment("肉ね！", is_meat_topic=True)  # フォールバック
 
             # 優先度レベルに基づいてコメント選択（絵文字を含まない素のテキスト）
+            is_dedicated = use_dedicated and self.has_dedicated_quote_comment(score_info["matched_keywords"])
             base_comment = self._select_comment_by_priority(
-                score_info["highest_priority_level"], score_info["matched_keywords"], original_tweet_text
+                score_info["highest_priority_level"],
+                score_info["matched_keywords"] if use_dedicated else [],
+                original_tweet_text,
             )
 
             # 時間帯に応じた追加コメント。専用コメントと疑問形のセリフには付けない
             # （それだけで落ちているセリフに一言が重なり、語尾が2つ3つ並んでいたため）
-            if self.has_dedicated_quote_comment(score_info["matched_keywords"]) or base_comment.rstrip().endswith(
-                ("？", "?")
-            ):
+            if is_dedicated or base_comment.rstrip().endswith(("？", "?")):
                 time_comment = ""
             else:
                 # astimezone()で実行環境のローカル時刻（本番はJST）に直す
