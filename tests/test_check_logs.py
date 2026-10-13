@@ -186,6 +186,17 @@ class NotificationTests(CheckLogsTestBase):
         self.assertEqual(self.run_check("quote", "12:30"), 1)
         self.assertIn("TypeSafe でチェックできませんでした", self.sent_message())
 
+    def test_claude_unavailable_is_notified(self) -> None:
+        for label in ["Photo check", "Comment check"]:
+            with self.subTest(label=label):
+                self.notifier.reset_mock()
+                warning = f"📷 {label} unavailable: BadRequestError: credit balance is too low"
+                self.write_log(
+                    QUOTE_OK_NOTHING_QUOTED + [_line("12:30:05", "nikune.photo_checker", "WARNING", warning)]
+                )
+                self.assertEqual(self.run_check("quote", "12:30"), 1)
+                self.assertIn("Claude で写真・セリフを判定できませんでした", self.sent_message())
+
     def test_dry_run_does_not_send(self) -> None:
         self.write_log([])
         self.assertEqual(self.run_check("post", "09:00", "--dry-run"), 1)
