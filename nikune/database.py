@@ -23,7 +23,8 @@ RECENT_AVOID_RATIO = 0.6
 # 直近この回数の投稿と「ほぼ同じ文」のセリフも避ける
 SIMILAR_LOOKBACK = 3
 # 「ほぼ同じ文」とみなす一致度（difflib）。一語だけ入れ替えた長いセリフや、語尾だけ違うセリフが当たる。
-# 「肉ね！」「うお肉ね！」のような短い連作（0.75）は当たらない値にしている
+# 短いセリフの頭に呼びかけを足しただけのような組は一致度が低く出る（0.7）ので、
+# 片方がもう片方に丸ごと含まれる組も、一致度によらず「ほぼ同じ文」とみなす
 SIMILARITY_THRESHOLD = 0.85
 # 時間帯の制限がないトーンのセリフを出してよい「時」（＝いつでも）
 ALL_HOURS = frozenset(range(24))
@@ -525,7 +526,10 @@ class DatabaseManager:
         last_posts = recent[:SIMILAR_LOOKBACK]
 
         def too_similar(text: str) -> bool:
-            return any(SequenceMatcher(None, text, last).ratio() >= SIMILARITY_THRESHOLD for last in last_posts)
+            return any(
+                text in last or last in text or SequenceMatcher(None, text, last).ratio() >= SIMILARITY_THRESHOLD
+                for last in last_posts
+            )
 
         not_recent = [t for t in templates if t["template"] not in recently_used]
         not_similar = [t for t in not_recent if not too_similar(t["template"])]

@@ -226,11 +226,27 @@ class AvoidRecentTemplateTests(TestCase):
 
         self.assertEqual(picked, {"まったく別のセリフ"})
 
-    def test_short_series_lines_are_not_treated_as_near_duplicates(self) -> None:
-        db = _db_with_templates(["肉ね！", "うお肉ね！", "まったく別のセリフ"])
-        db.record_post(_template_id(db, "肉ね！"))
+    def test_line_contained_in_the_last_post_is_not_selected(self) -> None:
+        # 一致度は0.7で SIMILARITY_THRESHOLD に届かないが、片方がもう片方に丸ごと含まれる
+        for last, contained in [
+            ("呼びかけ！セリフを見て！", "セリフを見て！"),
+            ("セリフを見て！", "呼びかけ！セリフを見て！"),
+        ]:
+            with self.subTest(last=last):
+                db = _db_with_templates([last, contained, "まったく別のセリフ"])
+                db.record_post(_template_id(db, last))
 
-        picked = {db.get_available_template()["template"] for _ in range(60)}  # type: ignore[index]
+                picked = {db.get_available_template()["template"] for _ in range(30)}  # type: ignore[index]
+
+                self.assertEqual(picked, {"まったく別のセリフ"})
+
+    def test_contained_line_returns_once_it_is_out_of_the_lookback(self) -> None:
+        db = _db_with_templates(["肉ね！", "うお肉ね！"] + [f"別のセリフ{i}" for i in range(8)])
+        db.record_post(_template_id(db, "肉ね！"))
+        for i in range(3):  # 直近 SIMILAR_LOOKBACK 回から外れる
+            db.record_post(_template_id(db, f"別のセリフ{i}"))
+
+        picked = {db.get_available_template()["template"] for _ in range(100)}  # type: ignore[index]
 
         self.assertIn("うお肉ね！", picked)
 
