@@ -4,6 +4,7 @@ from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.jev_checker import JevChecker
+from nikune.meat_focus import MEAT_MAIN_KEY, MeatFocusVerdict
 from nikune.photo_checker import CommentVerdict, PhotoChecker, PhotoVerdict
 from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decide, is_uncertain
 from nikune.twitter_client import TwitterClient
@@ -149,6 +150,8 @@ class FoodSearchQueryTests(TestCase):
 
 
 def _jev_response(nouls: Dict[str, float], value_score: float = 2.0) -> SimpleNamespace:
+    # 「肉が主役か」の問い合わせ（nikune/meat_focus.py）にも同じモックが答えるので、肉が主役として返しておく
+    nouls = {MEAT_MAIN_KEY: 0.9, **nouls}
     return SimpleNamespace(
         model="jev-1.13.0",
         nouls={key: SimpleNamespace(noul=value) for key, value in nouls.items()},
@@ -190,7 +193,9 @@ class JevQuoteSafetyTests(TestCase):
         retweeter, results, generate_comment = self._run(client)
 
         self.assertTrue(results["success"])
-        client.system_one.assert_called_once()
+        # 1回目は「肉が主役か」、2回目が安全判定
+        self.assertEqual(client.system_one.call_count, 2)
+        self.assertIn(MEAT_MAIN_KEY, client.system_one.call_args_list[0].kwargs["questions"])
         generate_comment.assert_called_once()
         self.assertEqual(results["skipped_by_jev"], 0)
         self.assertIn(FOOD_TWEET.id, retweeter.processed_tweets)
@@ -639,3 +644,111 @@ class CommentCheckTests(TestCase):
 
         self.assertTrue(comment)
         self.assertEqual(results["comment_checks"], 0)
+
+
+class MeatFocusTests(TestCase):
+    """肉が入っていても主役ではない投稿を、肉の話題として最優先にしないことの確認
+    （2026-10-20、牛肉の乗ったそうめんのレシピを、写真に肉が写っていて本文に「焼肉のタレ」があるため
+    肉の話題として引用した）"""
+
+    def _run(
+        self,
+        meat_main: Dict[str, Any],
+        timeline: list[SimpleNamespace],
+        photo_verdicts: Dict[str, PhotoVerdict] | None = None,
+        dedicated: list[tuple[str, list[str]]] | None = None,
+        max_checks: int = 10,
+    ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
+        client = mock.MagicMock()
+        client.system_one.return_value = _jev_response(SAFE_NOULS)
+        photo_checker = mock.MagicMock(spec=PhotoChecker)
+        photo_checker.enabled = True
+        photo_checker.check.side_effect = lambda url, dishes, text: (photo_verdicts or {}).get(
+            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        )
+        photo_checker.comment_fits.return_value = CommentVerdict(fits=True, reason="ok")
+        retweeter = AutoQuoteRetweeter(
+            db_manager=_make_db_mock(),
+            dry_run=True,
+            jev_checker=JevChecker(api_key="fake", client=client),
+            photo_checker=photo_checker,
+        )
+        retweeter.dry_run = False
+        retweeter.content_generator._specific_keyword_comments = dedicated or []
+
+        def judge(checker: Any, tweet_id: str, text: str, photo_url: str | None = None) -> Any:
+            value = meat_main.get(tweet_id)
+            return None if value is None else MeatFocusVerdict(value, with_photo=photo_url is not None)
+
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+            mock.patch("nikune.auto_quote_retweeter.judge_meat_focus", side_effect=judge) as judge_mock,
+            mock.patch("nikune.auto_quote_retweeter.MEAT_FOCUS_CHECK_MAX_PER_RUN", max_checks),
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return results, post, judge_mock
+
+    def test_meat_as_a_side_ingredient_loses_to_a_real_meat_post(self) -> None:
+        photo_verdicts = {"noodles": PhotoVerdict(is_food=True, shows_meat=True, dishes=["牛肉"])}
+        timeline = [_photo_tweet("noodles", "そうめんに牛肉と焼肉のタレ"), _food_tweet("steak", "ステーキたべた")]
+
+        results, post, judge = self._run({"noodles": 0.15, "steak": 0.95}, timeline, photo_verdicts)
+
+        self.assertEqual(post.call_args.args[0], "steak")
+        self.assertEqual(results["meat_focus_checked"], 2)
+        self.assertEqual(results["not_meat_main"], 1)
+        # 写真付きの候補には写真のURLを渡す
+        self.assertEqual(judge.call_args_list[0].args[3], "https://example.com/noodles.jpg")
+
+    def test_side_meat_post_without_a_dedicated_comment_is_not_quoted(self) -> None:
+        photo_verdicts = {"noodles": PhotoVerdict(is_food=True, shows_meat=True, dishes=["牛肉"])}
+
+        results, post, _ = self._run(
+            {"noodles": 0.15}, [_photo_tweet("noodles", "そうめんに牛肉と焼肉のタレ")], photo_verdicts
+        )
+
+        # 肉のキーワードを外すと食べ物の話題でもなくなる（「そうめん」はキーワードにない）
+        post.assert_not_called()
+        self.assertEqual(results["not_meat_main"], 1)
+
+    def test_side_meat_post_gets_the_dish_comment_not_a_meat_one(self) -> None:
+        dedicated = [("焼肉", ["焼肉のセリフ"]), ("ラーメン", ["ラーメンのセリフ"])]
+
+        _, post, _ = self._run({"t1": 0.1}, [_food_tweet("t1", "焼肉のタレで作ったラーメン")], dedicated=dedicated)
+
+        comment = post.call_args.args[2]
+        self.assertIn("ラーメンのセリフ", comment)
+        self.assertNotIn("焼肉のセリフ", comment)
+        self.assertNotIn("🥩", comment)
+        self.assertNotIn("🍖", comment)
+
+    def test_unavailable_judgement_keeps_the_meat_ranking(self) -> None:
+        results, post, _ = self._run({}, [_food_tweet("t1", "焼肉たべた")])
+
+        self.assertEqual(post.call_args.args[0], "t1")
+        self.assertEqual(results["meat_focus_unavailable"], 1)
+        self.assertEqual(results["not_meat_main"], 0)
+
+    def test_only_meat_candidates_are_judged_up_to_the_limit(self) -> None:
+        timeline = [
+            _food_tweet("sushi", "寿司たべた"),
+            _food_tweet("m1", "焼肉たべた"),
+            _food_tweet("m2", "牛肉たべた"),
+            _food_tweet("m3", "ステーキたべた"),
+        ]
+
+        _, _, judge = self._run({"m1": 0.9, "m2": 0.9, "m3": 0.9}, timeline, max_checks=2)
+
+        self.assertEqual([c.args[1] for c in judge.call_args_list], ["m1", "m2"])
+
+    def test_not_judged_without_a_jev_key(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+        results: Dict[str, Any] = {"meat_focus_checked": 0, "meat_focus_unavailable": 0, "not_meat_main": 0}
+
+        with mock.patch("nikune.auto_quote_retweeter.judge_meat_focus") as judge:
+            not_meat = retweeter._check_meat_focus([_food_tweet("t1", "焼肉たべた")], {}, results)
+
+        judge.assert_not_called()
+        self.assertEqual(not_meat, set())

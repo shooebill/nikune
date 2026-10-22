@@ -49,6 +49,8 @@ QUOTE_RETWEET_HIGH_PRIORITY_LIMIT = int(
 TYPESAFE_API_KEY = (os.getenv("TYPESAFE_API_KEY") or "").strip() or None
 TYPESAFE_MODEL = (os.getenv("TYPESAFE_MODEL") or "").strip() or "jev-1.13.0"
 TYPESAFE_TIMEOUT_SECONDS = float(os.getenv("TYPESAFE_TIMEOUT_SECONDS", "10"))
+# 1回の実行で「肉が主役か」を Jev に聞く候補の上限（肉の話題に入る候補だけに聞く。1回あたり約$0.0001）
+MEAT_FOCUS_CHECK_MAX_PER_RUN = int(os.getenv("MEAT_FOCUS_CHECK_MAX_PER_RUN", "10"))
 
 # 引用RT候補の写真チェック（Claude）設定
 # - ANTHROPIC_API_KEY が未設定（空文字含む）なら写真は見ず、本文だけで従来どおり判定する

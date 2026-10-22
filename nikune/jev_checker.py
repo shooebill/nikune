@@ -12,6 +12,7 @@ Jev は文章を生成せず、State と型つきの質問（Noul / Score / Choi
     - API キーはログ・例外メッセージ・戻り値に一切含めない
 """
 
+import base64
 import logging
 import math
 import threading
@@ -32,6 +33,17 @@ MAX_ERROR_MESSAGE_LENGTH = 200
 
 JevStatus = Literal["ok", "disabled", "error"]
 JevQuestion = Noul | Score | Choice
+
+# 画像を送るリクエストに付けるヘッダー（付けないと画像は受け付けられない）
+IMAGES_HEADER = "TypeSafe-Danger-Zone-Images"
+
+
+@dataclass(frozen=True)
+class JevImage:
+    """Jev に添付する画像1枚（format は "jpg" / "jpeg" / "png"）"""
+
+    data: bytes
+    format: str
 
 
 @dataclass(frozen=True)
@@ -102,15 +114,40 @@ class JevChecker:
         # API キーを repr に出さない
         return f"JevChecker(enabled={self.enabled}, model={self.model!r}, timeout_seconds={self.timeout_seconds})"
 
-    def ask(self, state: JSONContent, questions: Mapping[str, JevQuestion]) -> JevResult:
-        """State と質問を Jev に送り、結果を返す。例外は投げない"""
+    def ask(
+        self,
+        state: JSONContent,
+        questions: Mapping[str, JevQuestion],
+        images: Optional[Mapping[str, JevImage]] = None,
+    ) -> JevResult:
+        """State と質問を Jev に送り、結果を返す。例外は投げない
+
+        Args:
+            images: 添付する画像（参照名 → JevImage）。State の中に参照名を書いた場所に画像が入る。
+                画像の入力は TypeSafe では試験的な機能（images.md の「Dreamer-ready」）で、
+                専用のヘッダーを付けたリクエストでだけ使える。SDK に専用の引数がないため、
+                ヘッダーと assets を extra_headers / extra_body で渡す
+        """
         if not self.enabled:
             self._log_disabled_once()
             return JevResult(status="disabled")
 
         try:
             client = self._get_client()
-            response = client.system_one(state=state, questions=dict(questions), model=self.model)
+            extra: Dict[str, Any] = {}
+            if images:
+                extra["extra_headers"] = {IMAGES_HEADER: "true"}
+                extra["extra_body"] = {
+                    "assets": {
+                        ref: {
+                            "type": "image",
+                            "format": image.format,
+                            "data_base64": base64.b64encode(image.data).decode("ascii"),
+                        }
+                        for ref, image in images.items()
+                    }
+                }
+            response = client.system_one(state=state, questions=dict(questions), model=self.model, **extra)
             return self._parse_response(response, questions)
         except Exception as e:  # noqa: BLE001 - どんな失敗でも呼び出し元を止めない
             error = self._describe_error(e)

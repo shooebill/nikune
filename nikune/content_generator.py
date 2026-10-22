@@ -806,7 +806,13 @@ class ContentGenerator:
             logger.error(f"❌ Error checking food keywords: {e}")
             return False
 
-    def get_food_keyword_score(self, text: str, extra_keywords: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _is_meat_keyword(self, keyword: str) -> bool:
+        """お肉のキーワードか（大文字小文字は区別しない）"""
+        return keyword.lower() in self._meat_keyword_set_lower
+
+    def get_food_keyword_score(
+        self, text: str, extra_keywords: Optional[List[str]] = None, exclude_meat: bool = False
+    ) -> Dict[str, Any]:
         """
         食関連（お肉＋食・レストラン全般）ツイートの優先度スコアを計算（正規表現最適化版）
 
@@ -814,6 +820,8 @@ class ContentGenerator:
             text (str): 判定対象のツイート本文
             extra_keywords: 本文以外から分かったキーワード（写真に写っていた料理など）。
                 本文に書かれていたのと同じ扱いでスコアに加える
+            exclude_meat: True にすると肉のキーワードを数えない（肉が入っていても主役ではないと
+                判定された投稿用。「焼肉のタレ」の「焼肉」や具の「牛肉」で肉の話題・肉のセリフにしないため）
 
         Returns:
             Dict[str, Any]: スコア情報を含む辞書
@@ -847,7 +855,7 @@ class ContentGenerator:
             if self._food_patterns:
                 # 最適化版: 正規表現パターンマッチング
                 for level, pattern in self._food_patterns.items():
-                    matches = pattern.findall(text)
+                    matches = [m for m in pattern.findall(text) if not (exclude_meat and self._is_meat_keyword(m))]
                     if matches:
                         priority_data = self._combined_keywords_priority[level]
                         priority = int(priority_data["priority"])
@@ -864,7 +872,7 @@ class ContentGenerator:
                     level_priority: int = priority_data["priority"]
 
                     for keyword in keywords:
-                        if keyword in text:
+                        if keyword in text and not (exclude_meat and self._is_meat_keyword(keyword)):
                             matched_keywords.append(keyword)
                             if level_priority > max_priority:
                                 max_priority = level_priority
@@ -875,7 +883,7 @@ class ContentGenerator:
             # マッチしたキーワードはre.IGNORECASEマッチのため原文の大文字小文字のまま
             # （例: "bbq"）になっている。MEAT_KEYWORDS側の表記（例: "BBQ"）と大文字小文字を
             # 無視して比較する。
-            is_meat_topic = any(keyword.lower() in self._meat_keyword_set_lower for keyword in deduped_keywords)
+            is_meat_topic = any(self._is_meat_keyword(keyword) for keyword in deduped_keywords)
 
             if is_food_related:
                 logger.debug(
@@ -909,6 +917,7 @@ class ContentGenerator:
         posted_at: Optional[datetime] = None,
         extra_keywords: Optional[List[str]] = None,
         use_dedicated: bool = True,
+        exclude_meat: bool = False,
     ) -> str:
         """食関連ツイート用のコメント生成（優先度対応版）
 
@@ -918,10 +927,11 @@ class ContentGenerator:
             extra_keywords: 本文以外から分かったキーワード（写真に写っていた料理など）
             use_dedicated: False にすると専用コメントを使わず、汎用の文言から選ぶ
                 （専用コメントが投稿の内容と食い違ったときの選び直し用）
+            exclude_meat: True にすると肉のキーワードを数えずに選ぶ（get_food_keyword_score と同じ）
         """
         try:
             # キーワードの優先度スコアを取得
-            score_info = self.get_food_keyword_score(original_tweet_text, extra_keywords)
+            score_info = self.get_food_keyword_score(original_tweet_text, extra_keywords, exclude_meat)
 
             if not score_info["is_food_related"]:
                 logger.warning("⚠️ Trying to generate comment for non-food-related tweet")

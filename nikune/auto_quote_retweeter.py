@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from config.settings import (
     BOT_NAME,
     COMMENT_CHECK_MAX_PER_RUN,
+    MEAT_FOCUS_CHECK_MAX_PER_RUN,
     PHOTO_CHECK_MAX_PER_RUN,
     QUOTE_RETWEET_HIGH_PRIORITY_LIMIT,
     QUOTE_RETWEET_MAX_PER_HOUR,
@@ -23,6 +24,7 @@ from config.settings import (
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.jev_checker import JevChecker
+from nikune.meat_focus import judge_meat_focus
 from nikune.photo_checker import PhotoChecker
 from nikune.quote_safety import evaluate_quote_candidate
 from nikune.twitter_client import TwitterClient
@@ -161,6 +163,9 @@ class AutoQuoteRetweeter:
                 "comment_check_unavailable": 0,
                 "photo_checked": 0,
                 "photo_unavailable": 0,
+                "meat_focus_checked": 0,
+                "meat_focus_unavailable": 0,
+                "not_meat_main": 0,
                 "skipped_by_jev": 0,
                 "jev_unavailable": 0,
                 "errors": [],
@@ -246,7 +251,14 @@ class AutoQuoteRetweeter:
 
             # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
             # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
-            candidates = self._rank_candidates(candidates, search_tweet_ids, photo_keywords)
+            ranked = self._rank_candidates(candidates, search_tweet_ids, photo_keywords)
+
+            # 肉の話題に入る候補は、肉が主役かを Jev で確かめ、主役でなければ肉の話題から外して並べ直す
+            # （肉が具として乗っているだけの投稿や「焼肉のタレ」で、肉の話題として最優先にしていたため）
+            not_meat_ids = self._check_meat_focus(ranked, photo_keywords, results)
+            if not_meat_ids:
+                ranked = self._rank_candidates(candidates, search_tweet_ids, photo_keywords, not_meat_ids)
+            candidates = ranked
 
             # 各ツイートをチェック
             for tweet in candidates:
@@ -259,9 +271,10 @@ class AutoQuoteRetweeter:
                 try:
                     posted_at = posted_times[tweet.id]
                     from_photo = photo_keywords.get(tweet.id, [])
+                    exclude_meat = tweet.id in not_meat_ids
 
                     # 食関連ツイートかチェック（お肉＋食・レストラン全般、優先度スコアリング対応）
-                    score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo)
+                    score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo, exclude_meat)
 
                     if score_info["is_food_related"]:
                         results["food_related_found"] += 1
@@ -277,7 +290,7 @@ class AutoQuoteRetweeter:
 
                         # 肉の話題でも、専用コメントのある食べ物でもないものは引用しない
                         # （「ランチ」等で拾った投稿に汎用の「肉ね！」を付けると的外れになる）
-                        if self._candidate_tier(score_info, from_photo) >= self.TIER_NOT_QUOTABLE:
+                        if self._candidate_tier(score_info, from_photo, exclude_meat) >= self.TIER_NOT_QUOTABLE:
                             results["skipped_no_fitting_comment"] += 1
                             logger.info("⏭️ Skipping: not a meat topic and no dedicated comment for it")
                             continue
@@ -312,7 +325,7 @@ class AutoQuoteRetweeter:
                         if results["comment_checks"] >= COMMENT_CHECK_MAX_PER_RUN:
                             logger.info("⏹️ Comment check limit reached, stopping further quotes in this run")
                             break
-                        comment = self._fitting_comment(tweet, posted_at, from_photo, score_info, results)
+                        comment = self._fitting_comment(tweet, posted_at, from_photo, score_info, results, exclude_meat)
                         if results["comment_check_unavailable"] > 0:
                             # 確かめられないセリフは投稿しない。障害はほかの候補でも同じなので、この回はここで終える。
                             # 一時的な障害で候補を失わないよう処理済みにはしない
@@ -380,6 +393,11 @@ class AutoQuoteRetweeter:
                 logger.info(
                     f"📷 Photos: checked {results['photo_checked']}, unavailable {results['photo_unavailable']}"
                 )
+            if results["meat_focus_checked"] > 0 or results["meat_focus_unavailable"] > 0:
+                logger.info(
+                    f"🥩 Meat focus: checked {results['meat_focus_checked']}, "
+                    f"not meat-main {results['not_meat_main']}, unavailable {results['meat_focus_unavailable']}"
+                )
             if results["skipped_no_fitting_comment"] > 0:
                 logger.info(
                     f"📊 Skipped {results['skipped_no_fitting_comment']} food tweets "
@@ -409,11 +427,15 @@ class AutoQuoteRetweeter:
     TIER_DEDICATED_COMMENT = 2  # 肉ではないが、専用コメントのある食べ物（寿司・餃子など）
     TIER_NOT_QUOTABLE = 3  # それ以外（引用しない）
 
-    def _candidate_tier(self, score_info: Dict[str, Any], from_photo: List[str]) -> int:
-        """スコア情報と写真から分かったキーワードから、引用候補の優先順を決める"""
+    def _candidate_tier(self, score_info: Dict[str, Any], from_photo: List[str], exclude_meat: bool = False) -> int:
+        """スコア情報と写真から分かったキーワードから、引用候補の優先順を決める
+
+        exclude_meat: 肉が主役ではないと判定した候補。写真に肉が写っていても肉の話題にしない
+        （score_info も肉のキーワードを除いて計算したものを渡す）
+        """
         if not score_info["is_food_related"]:
             return self.TIER_NOT_QUOTABLE
-        if self.content_generator.PHOTO_MEAT_KEYWORD in from_photo:
+        if not exclude_meat and self.content_generator.PHOTO_MEAT_KEYWORD in from_photo:
             return self.TIER_MEAT_IN_PHOTO
         if score_info["is_meat_topic"]:
             return self.TIER_MEAT
@@ -422,18 +444,25 @@ class AutoQuoteRetweeter:
         return self.TIER_NOT_QUOTABLE
 
     def _rank_candidates(
-        self, tweets: List[Any], search_tweet_ids: set[Any], photo_keywords: Dict[Any, List[str]]
+        self,
+        tweets: List[Any],
+        search_tweet_ids: set[Any],
+        photo_keywords: Dict[Any, List[str]],
+        not_meat_ids: Optional[set[Any]] = None,
     ) -> List[Any]:
         """引用候補を「写真に肉 → 本文が肉の話題 → 専用コメントのある食べ物 → それ以外」の順に並べ替える
 
         同じ順位の中では、フォロー中タイムラインの投稿を検索APIの投稿より先にし、
-        それ以外は元の並び（新しい順）を保つ。
+        それ以外は元の並び（新しい順）を保つ。not_meat_ids の候補（肉が主役ではないと判定したもの）は
+        肉の話題に入れない。
         """
+        not_meat_ids = not_meat_ids or set()
 
         def sort_key(tweet: Any) -> tuple[int, bool]:
             from_photo = photo_keywords.get(tweet.id, [])
-            score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo)
-            return (self._candidate_tier(score_info, from_photo), tweet.id in search_tweet_ids)
+            exclude_meat = tweet.id in not_meat_ids
+            score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo, exclude_meat)
+            return (self._candidate_tier(score_info, from_photo, exclude_meat), tweet.id in search_tweet_ids)
 
         return sorted(tweets, key=sort_key)
 
@@ -479,6 +508,42 @@ class AutoQuoteRetweeter:
 
         return photo_keywords
 
+    def _check_meat_focus(
+        self, candidates: List[Any], photo_keywords: Dict[Any, List[str]], results: Dict[str, Any]
+    ) -> set[Any]:
+        """肉の話題に入る候補について肉が主役かを Jev に聞き、主役ではなかった候補のIDを返す
+
+        判定できなかった候補とキーが未設定のときは含めない（従来どおり肉の話題として扱う）。
+        聞くのは並び順の先頭から、1回の実行で MEAT_FOCUS_CHECK_MAX_PER_RUN 件まで。
+        """
+        not_meat_ids: set[Any] = set()
+        if not self.jev_checker.enabled:
+            return not_meat_ids
+
+        attempts = 0
+        for tweet in candidates:
+            from_photo = photo_keywords.get(tweet.id, [])
+            score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo)
+            if self._candidate_tier(score_info, from_photo) > self.TIER_MEAT:
+                continue
+            if attempts >= MEAT_FOCUS_CHECK_MAX_PER_RUN:
+                break
+            attempts += 1
+
+            photo_urls = getattr(tweet, "photo_urls", None) or []
+            verdict = judge_meat_focus(
+                self.jev_checker, str(tweet.id), tweet.text, photo_urls[0] if photo_urls else None
+            )
+            if verdict is None:
+                results["meat_focus_unavailable"] += 1
+                continue
+            results["meat_focus_checked"] += 1
+            if not verdict.is_meat_main:
+                not_meat_ids.add(tweet.id)
+
+        results["not_meat_main"] = len(not_meat_ids)
+        return not_meat_ids
+
     def _fitting_comment(
         self,
         tweet: Any,
@@ -486,6 +551,7 @@ class AutoQuoteRetweeter:
         from_photo: List[str],
         score_info: Dict[str, Any],
         results: Dict[str, Any],
+        exclude_meat: bool = False,
     ) -> Optional[str]:
         """投稿の内容と食い違わないセリフを返す。合うものがなければ None
 
@@ -495,7 +561,9 @@ class AutoQuoteRetweeter:
         キーが未設定の環境では照合せず、選んだセリフをそのまま使う。キーがあるのに判定できなかったとき
         （API失敗・クレジット切れ）は results["comment_check_unavailable"] を増やして None を返す。
         """
-        comment = self.content_generator.generate_quote_comment(tweet.text, posted_at, from_photo)
+        comment = self.content_generator.generate_quote_comment(
+            tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
+        )
         if not self.photo_checker.enabled:
             return comment
 
@@ -508,7 +576,7 @@ class AutoQuoteRetweeter:
                 if not score_info["is_meat_topic"]:
                     return None
                 comment = self.content_generator.generate_quote_comment(
-                    tweet.text, posted_at, from_photo, use_dedicated=False
+                    tweet.text, posted_at, from_photo, use_dedicated=False, exclude_meat=exclude_meat
                 )
             results["comment_checks"] += 1
             verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
