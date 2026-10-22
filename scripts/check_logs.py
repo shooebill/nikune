@@ -20,6 +20,7 @@ cron から起動し、その回のログを読んで異常があるときだけ
     - TypeSafe のキーが設定されていない（投稿: decision=DISABLED。本番にはキーがあるので設定漏れ）
     - Jev の警告（投稿: decision=WARN）
     - Claude で写真・セリフを判定できなかった（引用RT。クレジット切れ・API の障害など）
+    - TypeSafe で「肉が主役か」を判定できなかった（引用RT。写真付きで失敗して本文だけで判定し直した回も含む）
 
 主な環境変数:
     - NIKUNE_LOG_DIR:
@@ -74,6 +75,14 @@ CLAUDE_UNAVAILABLE_MARKERS = (
     "📷 Comment check unavailable",
 )
 CLAUDE_UNAVAILABLE_REASON = "Claude で写真・セリフを判定できませんでした"
+
+# Jev で「肉が主役か」を判定できなかったときの行（nikune/meat_focus.py が出す）。
+# 写真付きで失敗したときは本文だけで判定し直すが、写真の入力は試験的な機能なので気付けるよう通知する
+MEAT_FOCUS_UNAVAILABLE_MARKERS = (
+    "🥩 Meat focus with photo unavailable",
+    "🥩 Meat focus unavailable",
+)
+MEAT_FOCUS_UNAVAILABLE_REASON = "TypeSafe で「肉が主役か」を判定できませんでした"
 
 # 通知文に載せる前に伏せ字にする秘密情報のパターン
 _SECRET_PATTERNS = (
@@ -224,6 +233,9 @@ def check_log(target: Target, log_path: Path, start: datetime, end: datetime) ->
             evidence_index.add(index)
         if any(marker in line for marker in CLAUDE_UNAVAILABLE_MARKERS):
             result.add(CLAUDE_UNAVAILABLE_REASON)
+            evidence_index.add(index)
+        if any(marker in line for marker in MEAT_FOCUS_UNAVAILABLE_MARKERS):
+            result.add(MEAT_FOCUS_UNAVAILABLE_REASON)
             evidence_index.add(index)
         if target.jev_marker in line:
             decision = _decision(line)

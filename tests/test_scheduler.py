@@ -18,7 +18,7 @@ from unittest import TestCase, mock
 from typesafe_sdk import JSONContent
 
 from nikune.content_generator import GeneratedTweetContent
-from nikune.jev_checker import JevChecker, JevQuestion, JevResult
+from nikune.jev_checker import JevChecker, JevImage, JevQuestion, JevResult
 from nikune.post_safety import OFFENSIVE_KEY, PROMOTION_KEY
 from nikune.scheduler import SchedulerManager
 
@@ -99,7 +99,12 @@ class _RecordingChecker(JevChecker):
         self.texts: List[str] = []
         self.events: Optional[List[str]] = None
 
-    def ask(self, state: JSONContent, questions: Mapping[str, JevQuestion]) -> JevResult:
+    def ask(
+        self,
+        state: JSONContent,
+        questions: Mapping[str, JevQuestion],
+        images: Optional[Mapping[str, JevImage]] = None,
+    ) -> JevResult:
         assert isinstance(state, dict) and isinstance(state["post"], dict)
         self.texts.append(str(state["post"]["text"]))
         if self.events is not None:

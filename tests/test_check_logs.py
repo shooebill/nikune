@@ -197,6 +197,23 @@ class NotificationTests(CheckLogsTestBase):
                 self.assertEqual(self.run_check("quote", "12:30"), 1)
                 self.assertIn("Claude で写真・セリフを判定できませんでした", self.sent_message())
 
+    def test_meat_focus_unavailable_is_notified(self) -> None:
+        # 写真付きで失敗して本文だけで判定し直した回も、判定できなかった回も通知する
+        for warning in [
+            "🥩 Meat focus with photo unavailable: tweet=1 (BadRequestError (HTTP 400): x), retrying without the photo",
+            "🥩 Meat focus unavailable: tweet=1 (APIConnectionError: timeout)",
+        ]:
+            with self.subTest(warning=warning):
+                self.notifier.reset_mock()
+                self.write_log(QUOTE_OK_NOTHING_QUOTED + [_line("12:30:05", "nikune.meat_focus", "WARNING", warning)])
+                self.assertEqual(self.run_check("quote", "12:30"), 1)
+                self.assertIn("TypeSafe で「肉が主役か」を判定できませんでした", self.sent_message())
+
+    def test_meat_focus_result_is_not_notified(self) -> None:
+        info = "🥩 Meat focus: tweet=1 meat_main=0.15 main=False photo=True model=jev-1.13.0"
+        self.write_log(QUOTE_OK_NOTHING_QUOTED + [_line("12:30:05", "nikune.meat_focus", "INFO", info)])
+        self.assertEqual(self.run_check("quote", "12:30"), 0)
+
     def test_dry_run_does_not_send(self) -> None:
         self.write_log([])
         self.assertEqual(self.run_check("post", "09:00", "--dry-run"), 1)

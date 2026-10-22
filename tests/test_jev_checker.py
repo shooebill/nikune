@@ -1,5 +1,6 @@
 """nikune/jev_checker.py のテスト（実APIは呼ばない。httpx2.MockTransportでHTTP応答を差し替える）"""
 
+import base64
 import json
 import logging
 from typing import Any, Callable, Dict
@@ -9,7 +10,7 @@ import httpx2
 from typesafe_sdk import Noul, RetryPolicy, Score, TypeSafeClient
 
 from config import settings
-from nikune.jev_checker import JevChecker, JevQuestion
+from nikune.jev_checker import IMAGES_HEADER, JevChecker, JevImage, JevQuestion
 
 FAKE_KEY = "fake-test-key-0123456789"
 
@@ -43,6 +44,41 @@ def _ok_body(noul: Any = 0.9, score: Any = 1.2) -> Dict[str, Any]:
         },
         "usage": {"input_tokens": 100, "output_tokens": 10},
     }
+
+
+class JevCheckerImageTests(TestCase):
+    def test_images_are_sent_as_assets_with_the_images_header(self) -> None:
+        sent: Dict[str, Any] = {}
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            sent["headers"] = request.headers
+            sent["body"] = json.loads(request.content)
+            return httpx2.Response(200, json=_ok_body())
+
+        result = _checker_with_handler(handler).ask(
+            {"photo": "ref-1"}, QUESTIONS, images={"ref-1": JevImage(data=b"\xff\xd8jpeg", format="jpg")}
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(sent["headers"][IMAGES_HEADER], "true")
+        asset = sent["body"]["assets"]["ref-1"]
+        self.assertEqual(asset["type"], "image")
+        self.assertEqual(asset["format"], "jpg")
+        self.assertEqual(base64.b64decode(asset["data_base64"]), b"\xff\xd8jpeg")
+        self.assertEqual(sent["body"]["state"], {"photo": "ref-1"})
+
+    def test_requests_without_images_do_not_send_the_header(self) -> None:
+        sent: Dict[str, Any] = {}
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            sent["headers"] = request.headers
+            sent["body"] = json.loads(request.content)
+            return httpx2.Response(200, json=_ok_body())
+
+        _checker_with_handler(handler).ask({"text": "テスト"}, QUESTIONS)
+
+        self.assertNotIn(IMAGES_HEADER, sent["headers"])
+        self.assertNotIn("assets", sent["body"])
 
 
 class JevCheckerSuccessTests(TestCase):

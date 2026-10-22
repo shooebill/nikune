@@ -8,7 +8,7 @@ from unittest import TestCase, mock
 from typesafe_sdk import JSONContent
 
 from nikune import post_safety
-from nikune.jev_checker import JevChecker, JevQuestion, JevResult
+from nikune.jev_checker import JevChecker, JevImage, JevQuestion, JevResult
 from nikune.post_safety import (
     OFFENSIVE_KEY,
     PERSONA_KEY,
@@ -31,7 +31,12 @@ class StubChecker(JevChecker):
         self.error = error
         self.calls: List[Tuple[JSONContent, Mapping[str, JevQuestion]]] = []
 
-    def ask(self, state: JSONContent, questions: Mapping[str, JevQuestion]) -> JevResult:
+    def ask(
+        self,
+        state: JSONContent,
+        questions: Mapping[str, JevQuestion],
+        images: Optional[Mapping[str, JevImage]] = None,
+    ) -> JevResult:
         self.calls.append((state, questions))
         if self.error is not None:
             raise self.error
