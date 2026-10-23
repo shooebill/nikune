@@ -20,6 +20,7 @@ from config.settings import (
     QUOTE_RETWEET_MAX_TWEET_AGE_HOURS,
     QUOTE_RETWEET_MIN_INTERVAL_MINUTES,
     QUOTE_RETWEET_MIN_PRIORITY_SCORE,
+    QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS,
 )
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
@@ -92,6 +93,7 @@ class AutoQuoteRetweeter:
         self.max_quotes_per_hour = QUOTE_RETWEET_MAX_PER_HOUR
         self.quotes_in_last_hour: List[datetime] = []
         self.max_tweet_age = timedelta(hours=QUOTE_RETWEET_MAX_TWEET_AGE_HOURS)
+        self.same_author_cooldown = timedelta(days=QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS)
 
         # 優先度システム設定
         self.min_priority_score = QUOTE_RETWEET_MIN_PRIORITY_SCORE
@@ -157,6 +159,7 @@ class AutoQuoteRetweeter:
                 "skipped_rate_limit": 0,
                 "skipped_too_old": 0,
                 "skipped_retweet": 0,
+                "skipped_recent_author": 0,
                 "skipped_no_fitting_comment": 0,
                 "skipped_comment_mismatch": 0,
                 "comment_checks": 0,
@@ -203,7 +206,11 @@ class AutoQuoteRetweeter:
             results["checked_tweets"] = len(timeline_tweets)
             logger.info(f"🔍 Checking {len(timeline_tweets)} tweets from timeline")
 
-            # 引用できないもの（処理済み・引用済み・自分の投稿・リツイート・古いもの）を先に除く
+            # 最近引用したアカウント（同じ相手を続けて引用しない。以前は引用の大半が3アカウントに偏り、
+            # 連日や同じ日に同じ相手を引用していた）
+            recent_authors = self.db_manager.get_quoted_authors_since(datetime.now() - self.same_author_cooldown)
+
+            # 引用できないもの（処理済み・引用済み・自分の投稿・リツイート・古いもの・最近引用した相手）を先に除く
             skipped_processed = 0
             candidates: List[Any] = []
             posted_times: Dict[Any, Optional[datetime]] = {}
@@ -238,6 +245,11 @@ class AutoQuoteRetweeter:
                         logger.debug(f"⏭️ Too old to quote: {tweet.id} (posted {posted_at.isoformat()})")
                         continue
 
+                    if self._author_key(tweet) in recent_authors:
+                        results["skipped_recent_author"] += 1
+                        logger.debug(f"⏭️ Quoted this author recently: {tweet.id}")
+                        continue
+
                     candidates.append(tweet)
                     posted_times[tweet.id] = posted_at
 
@@ -269,6 +281,11 @@ class AutoQuoteRetweeter:
                     break
 
                 try:
+                    # 同じ実行の中で引用した相手も続けて引用しない
+                    if self._author_key(tweet) in recent_authors:
+                        results["skipped_recent_author"] += 1
+                        continue
+
                     posted_at = posted_times[tweet.id]
                     from_photo = photo_keywords.get(tweet.id, [])
                     exclude_meat = tweet.id in not_meat_ids
@@ -356,7 +373,11 @@ class AutoQuoteRetweeter:
                                     self.high_priority_quotes_in_hour.append(self.last_quote_time)
 
                                 logger.info(f"✅ Successfully posted quote tweet: {quote_id}")
-                                self.db_manager.record_quote(str(tweet.id), str(quote_id), score, self.last_quote_time)
+                                self.db_manager.record_quote(
+                                    str(tweet.id), str(quote_id), score, self.last_quote_time, author_username
+                                )
+                                if author_username:
+                                    recent_authors.add(author_username.lower())
 
                         # 処理済みとしてマーク（OrderedDictに処理時刻と共に記録・スレッドセーフ）
                         with self._processed_tweets_lock:
@@ -407,6 +428,11 @@ class AutoQuoteRetweeter:
                 logger.info(
                     f"📊 Skipped {results['skipped_comment_mismatch']} food tweets "
                     "(every comment contradicted the post)"
+                )
+            if results["skipped_recent_author"] > 0:
+                logger.info(
+                    f"📊 Skipped {results['skipped_recent_author']} tweets from authors quoted in the last "
+                    f"{QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS:g} days"
                 )
             if results["skipped_too_old"] > 0 or results["skipped_retweet"] > 0:
                 logger.info(
@@ -707,6 +733,12 @@ class AutoQuoteRetweeter:
             return tweet_author_id == self.my_user_id
         except Exception:
             return False
+
+    @staticmethod
+    def _author_key(tweet: Any) -> Optional[str]:
+        """同じ相手かを比べるためのアカウント名（小文字）。分からなければ None"""
+        author_username = getattr(tweet, "author_username", None)
+        return author_username.lower() if author_username else None
 
     @staticmethod
     def _posted_at(tweet: Any) -> Optional[datetime]:

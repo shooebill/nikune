@@ -15,6 +15,7 @@ def _make_db_mock() -> mock.MagicMock:
     db = mock.MagicMock()
     db.has_quoted.return_value = False
     db.get_quotes_since.return_value = []
+    db.get_quoted_authors_since.return_value = set()
     return db
 
 
@@ -331,6 +332,70 @@ class CrossRunRateLimitTests(TestCase):
         self.assertEqual(results["skipped_rate_limit"], 1)
         post.assert_not_called()
         self.assertIsNotNone(retweeter.last_quote_time)
+
+
+class SameAuthorCooldownTests(TestCase):
+    """同じアカウントを続けて引用しないことの確認
+    （9/23〜10/9の引用17件のうち13件が3アカウントに偏り、連日や同じ日に同じ相手を引用していた）"""
+
+    def test_author_quoted_recently_is_skipped(self) -> None:
+        db = _make_db_mock()
+        db.get_quoted_authors_since.return_value = {"meat_lover"}
+        tweets = [
+            SimpleNamespace(id="t1", text="焼肉たべた", author_id="a", author_username="Meat_Lover", created_at=""),
+            SimpleNamespace(id="t2", text="ステーキたべた", author_id="b", author_username="other", created_at=""),
+        ]
+
+        _, results, post = _run_live(db, tweets)
+
+        # アカウント名は大文字・小文字を区別せずに比べる
+        self.assertEqual(results["skipped_recent_author"], 1)
+        self.assertEqual(post.call_args.args[0], "t2")
+
+    def test_only_recent_author_means_no_quote(self) -> None:
+        db = _make_db_mock()
+        db.get_quoted_authors_since.return_value = {"u"}
+
+        _, results, post = _run_live(db, [_food_tweet("t1", "焼肉たべた")])
+
+        self.assertEqual(results["quote_posted"], 0)
+        post.assert_not_called()
+
+    def test_cooldown_window_and_author_are_recorded(self) -> None:
+        from datetime import datetime, timedelta
+
+        db = _make_db_mock()
+
+        retweeter, _, _ = _run_live(db, [_food_tweet("t1", "焼肉たべた")])
+
+        since = db.get_quoted_authors_since.call_args.args[0]
+        self.assertAlmostEqual(
+            (datetime.now() - since).total_seconds(), retweeter.same_author_cooldown.total_seconds(), delta=60
+        )
+        self.assertEqual(retweeter.same_author_cooldown, timedelta(days=3))
+        self.assertEqual(db.record_quote.call_args.args[4], "u")
+
+    def test_same_author_is_not_quoted_twice_in_one_run(self) -> None:
+        # HIGH優先度の候補は1回の実行で続けて引用しうる（9/27に同じ相手を同じ回で2件引用した）
+        db = _make_db_mock()
+        tweets = [
+            SimpleNamespace(id="t1", text="焼肉たべた", author_id="a", author_username="same", created_at=""),
+            SimpleNamespace(id="t2", text="ステーキたべた", author_id="a", author_username="same", created_at=""),
+        ]
+        retweeter = AutoQuoteRetweeter(db_manager=db, dry_run=True)
+        retweeter.dry_run = False
+        # レート制限ではなく相手で止まることを見るため、レート制限は外す
+        with (
+            mock.patch.object(retweeter, "_can_quote_now", return_value=True),
+            mock.patch.object(retweeter, "_can_quote_high_priority", return_value=True),
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=tweets),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+        ):
+            results = retweeter.check_and_quote_tweets()
+
+        post.assert_called_once()
+        self.assertEqual(results["skipped_recent_author"], 1)
 
 
 def _tweet_posted(tweet_id: str, text: str, hours_ago: float) -> SimpleNamespace:

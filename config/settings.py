@@ -35,6 +35,8 @@ QUOTE_RETWEET_MIN_INTERVAL_MINUTES = int(os.getenv("QUOTE_RETWEET_MIN_INTERVAL_M
 QUOTE_RETWEET_MAX_PER_HOUR = int(os.getenv("QUOTE_RETWEET_MAX_PER_HOUR", "2"))
 # 投稿からこの時間を超えたツイートは引用しない（前の晩の投稿に翌朝コメントするのを防ぐ）
 QUOTE_RETWEET_MAX_TWEET_AGE_HOURS = float(os.getenv("QUOTE_RETWEET_MAX_TWEET_AGE_HOURS", "3"))
+# 同じアカウントは、前に引用してからこの日数が経つまで引用しない（引用先が数アカウントに偏っていたため）
+QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS = float(os.getenv("QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS", "3"))
 
 # 優先度システム設定
 QUOTE_RETWEET_MIN_PRIORITY_SCORE = int(os.getenv("QUOTE_RETWEET_MIN_PRIORITY_SCORE", "1"))  # 最低優先度スコア
