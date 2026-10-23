@@ -39,11 +39,11 @@ class FakeRedisClient:
         self.store.clear()
 
 
-def _make_db_manager_without_connections() -> DatabaseManager:
+def _make_db_manager_without_connections(sqlite_path: str = ":memory:") -> DatabaseManager:
     """__init__（実SQLite/Redis接続）をバイパスし、SQLiteはin-memory・Redisは
     テストダブルで組み立てる"""
     db = DatabaseManager.__new__(DatabaseManager)
-    db.sqlite_conn = sqlite3.connect(":memory:")
+    db.sqlite_conn = sqlite3.connect(sqlite_path)
     db.sqlite_conn.row_factory = sqlite3.Row
     db._create_tables()
     return db
@@ -147,6 +147,40 @@ class QuoteHistoryTests(TestCase):
         self.assertFalse(db.has_quoted("222"))
         self.assertEqual(db.get_quotes_since(now - timedelta(hours=1)), [{"quoted_at": now, "priority_score": 3}])
         self.assertEqual(db.get_quotes_since(now), [])
+
+    def test_quoted_authors_since(self) -> None:
+        from datetime import datetime, timedelta
+
+        db = _make_db_manager_without_connections()
+        now = datetime(2026, 10, 22, 18, 30)
+        db.record_quote("111", "999", 2, now - timedelta(days=4), "OldFriend")
+        db.record_quote("222", "998", 2, now - timedelta(days=1), "SyokoJiro")
+        db.record_quote("333", "997", 2, now - timedelta(hours=1))  # アカウント名を記録する前の引用
+
+        self.assertEqual(db.get_quoted_authors_since(now - timedelta(days=3)), {"syokojiro"})
+
+    def test_old_quote_history_gets_author_column(self) -> None:
+        # アカウント名の列がないころに作ったDBでも、起動時に列を足して記録できる
+        import tempfile
+        from datetime import datetime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/old.db"
+            conn = sqlite3.connect(path)
+            conn.execute(
+                "CREATE TABLE quote_history (source_tweet_id TEXT PRIMARY KEY, quote_tweet_id TEXT NOT NULL, "
+                "priority_score INTEGER NOT NULL, quoted_at TEXT NOT NULL)"
+            )
+            conn.execute("INSERT INTO quote_history VALUES ('111', '999', 2, '2026-10-22T18:30:00')")
+            conn.commit()
+            conn.close()
+
+            db = _make_db_manager_without_connections(path)
+            db.record_quote("222", "998", 2, datetime(2026, 10, 23, 12, 30), "someone")
+
+            self.assertTrue(db.has_quoted("111"))
+            self.assertEqual(db.get_quoted_authors_since(datetime(2026, 10, 1)), {"someone"})
+            db.sqlite_conn.close()
 
     def test_clear_all_templates_keeps_quote_history(self) -> None:
         from datetime import datetime

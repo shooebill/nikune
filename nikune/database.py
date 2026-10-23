@@ -153,6 +153,11 @@ class DatabaseManager:
         """
         )
 
+        # 引用先のアカウント名の列（同じ相手を続けて引用しないために使う）。以前に作ったDBにはないので、なければ足す
+        quote_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(quote_history)")}
+        if "author_username" not in quote_columns:
+            cursor.execute("ALTER TABLE quote_history ADD COLUMN author_username TEXT")
+
         # 独り言ツイートの履歴テーブル（最近使ったセリフを避けて選ぶために使う。--setup-db でも消さない。
         # テンプレートを入れ直すとIDが変わるので、セリフの本文も持っておく）
         cursor.execute(
@@ -272,7 +277,14 @@ class DatabaseManager:
 
     # ===== 引用RT履歴（SQLite） =====
 
-    def record_quote(self, source_tweet_id: str, quote_tweet_id: str, priority_score: int, quoted_at: datetime) -> None:
+    def record_quote(
+        self,
+        source_tweet_id: str,
+        quote_tweet_id: str,
+        priority_score: int,
+        quoted_at: datetime,
+        author_username: Optional[str] = None,
+    ) -> None:
         """
         引用RTした記録を保存する
 
@@ -281,14 +293,16 @@ class DatabaseManager:
             quote_tweet_id: 投稿した引用RTのID
             priority_score: 引用元ツイートの優先度スコア
             quoted_at: 投稿時刻（ローカル時刻）
+            author_username: 引用元ツイートの投稿者のアカウント名（@なし）
         """
         cursor = self.sqlite_conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO quote_history (source_tweet_id, quote_tweet_id, priority_score, quoted_at)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO quote_history
+                (source_tweet_id, quote_tweet_id, priority_score, quoted_at, author_username)
+            VALUES (?, ?, ?, ?, ?)
         """,
-            (str(source_tweet_id), str(quote_tweet_id), priority_score, quoted_at.isoformat()),
+            (str(source_tweet_id), str(quote_tweet_id), priority_score, quoted_at.isoformat(), author_username),
         )
         self.sqlite_conn.commit()
 
@@ -314,6 +328,20 @@ class DatabaseManager:
             {"quoted_at": datetime.fromisoformat(row["quoted_at"]), "priority_score": int(row["priority_score"])}
             for row in cursor.fetchall()
         ]
+
+    def get_quoted_authors_since(self, since: datetime) -> set[str]:
+        """
+        指定時刻以降に引用したアカウント名を、小文字にそろえて返す
+
+        アカウント名は大文字・小文字を区別しないため、比べる側も小文字にして使う。
+        アカウント名を記録する前の引用（author_username が空のもの）は含まれない。
+        """
+        cursor = self.sqlite_conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT author_username FROM quote_history WHERE quoted_at > ? AND author_username IS NOT NULL",
+            (since.isoformat(),),
+        )
+        return {str(row["author_username"]).lower() for row in cursor.fetchall()}
 
     # ===== 独り言ツイートの履歴（SQLite） =====
 
