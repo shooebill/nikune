@@ -160,6 +160,8 @@ class AutoQuoteRetweeter:
                 "skipped_too_old": 0,
                 "skipped_retweet": 0,
                 "skipped_recent_author": 0,
+                "skipped_search_no_photo": 0,
+                "skipped_search_not_meat_main": 0,
                 "skipped_no_fitting_comment": 0,
                 "skipped_comment_mismatch": 0,
                 "comment_checks": 0,
@@ -194,7 +196,9 @@ class AutoQuoteRetweeter:
                 if not fetched_tweets:
                     results["errors"].append("Timeline fetch failed or empty after retries")
 
-                search_tweets = self._fetch_search_candidates()
+                # フォロー外の人は「写真付きで、Jev が肉が主役と判定した投稿」しか引用しないため、
+                # Jev のキーがなければ検索しない（読み取り費用だけかかって引用できる候補がない）
+                search_tweets = self._fetch_search_candidates() if self.jev_checker.enabled else []
                 timeline_tweets = fetched_tweets + search_tweets
                 search_tweet_ids = {tweet.id for tweet in search_tweets}
 
@@ -250,6 +254,12 @@ class AutoQuoteRetweeter:
                         logger.debug(f"⏭️ Quoted this author recently: {tweet.id}")
                         continue
 
+                    # フォロー外の人は写真付きの投稿だけ（地名と料理名だけの短い投稿や、写真のない式典の告知に
+                    # 引用したことがあった）
+                    if tweet.id in search_tweet_ids and not (getattr(tweet, "photo_urls", None) or []):
+                        results["skipped_search_no_photo"] += 1
+                        continue
+
                     candidates.append(tweet)
                     posted_times[tweet.id] = posted_at
 
@@ -267,10 +277,13 @@ class AutoQuoteRetweeter:
 
             # 肉の話題に入る候補は、肉が主役かを Jev で確かめ、主役でなければ肉の話題から外して並べ直す
             # （肉が具として乗っているだけの投稿や「焼肉のタレ」で、肉の話題として最優先にしていたため）
-            not_meat_ids = self._check_meat_focus(ranked, photo_keywords, results)
+            not_meat_ids, meat_main_ids = self._check_meat_focus(ranked, photo_keywords, results)
             if not_meat_ids:
                 ranked = self._rank_candidates(candidates, search_tweet_ids, photo_keywords, not_meat_ids)
-            candidates = ranked
+
+            # フォロー外の人は、Jev が肉が主役と判定した投稿だけを残す（判定できなかった投稿も外す）
+            candidates = [t for t in ranked if t.id not in search_tweet_ids or t.id in meat_main_ids]
+            results["skipped_search_not_meat_main"] = len(ranked) - len(candidates)
 
             # 各ツイートをチェック
             for tweet in candidates:
@@ -434,6 +447,12 @@ class AutoQuoteRetweeter:
                     f"📊 Skipped {results['skipped_recent_author']} tweets from authors quoted in the last "
                     f"{QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS:g} days"
                 )
+            if results["skipped_search_no_photo"] > 0 or results["skipped_search_not_meat_main"] > 0:
+                logger.info(
+                    f"📊 Skipped search tweets from accounts we don't follow: "
+                    f"{results['skipped_search_no_photo']} without a photo, "
+                    f"{results['skipped_search_not_meat_main']} not judged meat-main"
+                )
             if results["skipped_too_old"] > 0 or results["skipped_retweet"] > 0:
                 logger.info(
                     f"📊 Skipped {results['skipped_too_old']} tweets older than "
@@ -478,17 +497,18 @@ class AutoQuoteRetweeter:
     ) -> List[Any]:
         """引用候補を「写真に肉 → 本文が肉の話題 → 専用コメントのある食べ物 → それ以外」の順に並べ替える
 
-        同じ順位の中では、フォロー中タイムラインの投稿を検索APIの投稿より先にし、
-        それ以外は元の並び（新しい順）を保つ。not_meat_ids の候補（肉が主役ではないと判定したもの）は
-        肉の話題に入れない。
+        検索APIの投稿（フォロー外の人）は、順位にかかわらずフォロー中タイムラインの投稿すべての後ろにする
+        （同じ順位の中だけで後ろにしていたときは、タイムラインの寿司より知らない人の肉が先に選ばれ、
+        10/24〜11/5の引用9件のうち6件がフォロー外になった）。それ以外は元の並び（新しい順）を保つ。
+        not_meat_ids の候補（肉が主役ではないと判定したもの）は肉の話題に入れない。
         """
         not_meat_ids = not_meat_ids or set()
 
-        def sort_key(tweet: Any) -> tuple[int, bool]:
+        def sort_key(tweet: Any) -> tuple[bool, int]:
             from_photo = photo_keywords.get(tweet.id, [])
             exclude_meat = tweet.id in not_meat_ids
             score_info = self.content_generator.get_food_keyword_score(tweet.text, from_photo, exclude_meat)
-            return (self._candidate_tier(score_info, from_photo, exclude_meat), tweet.id in search_tweet_ids)
+            return (tweet.id in search_tweet_ids, self._candidate_tier(score_info, from_photo, exclude_meat))
 
         return sorted(tweets, key=sort_key)
 
@@ -536,15 +556,17 @@ class AutoQuoteRetweeter:
 
     def _check_meat_focus(
         self, candidates: List[Any], photo_keywords: Dict[Any, List[str]], results: Dict[str, Any]
-    ) -> set[Any]:
-        """肉の話題に入る候補について肉が主役かを Jev に聞き、主役ではなかった候補のIDを返す
+    ) -> tuple[set[Any], set[Any]]:
+        """肉の話題に入る候補について肉が主役かを Jev に聞き、（主役ではなかった候補, 主役だった候補）のIDを返す
 
-        判定できなかった候補とキーが未設定のときは含めない（従来どおり肉の話題として扱う）。
+        判定できなかった候補とキーが未設定のときはどちらにも含めない（タイムラインの投稿は従来どおり
+        肉の話題として扱い、フォロー外の投稿は引用しない）。
         聞くのは並び順の先頭から、1回の実行で MEAT_FOCUS_CHECK_MAX_PER_RUN 件まで。
         """
         not_meat_ids: set[Any] = set()
+        meat_main_ids: set[Any] = set()
         if not self.jev_checker.enabled:
-            return not_meat_ids
+            return not_meat_ids, meat_main_ids
 
         attempts = 0
         for tweet in candidates:
@@ -564,11 +586,13 @@ class AutoQuoteRetweeter:
                 results["meat_focus_unavailable"] += 1
                 continue
             results["meat_focus_checked"] += 1
-            if not verdict.is_meat_main:
+            if verdict.is_meat_main:
+                meat_main_ids.add(tweet.id)
+            else:
                 not_meat_ids.add(tweet.id)
 
         results["not_meat_main"] = len(not_meat_ids)
-        return not_meat_ids
+        return not_meat_ids, meat_main_ids
 
     def _fitting_comment(
         self,
