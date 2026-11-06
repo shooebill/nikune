@@ -513,15 +513,6 @@ class MeatFirstSelectionTests(TestCase):
         self.assertEqual(results["skipped_no_fitting_comment"], 2)
         post.assert_not_called()
 
-    def test_timeline_comes_before_search_within_the_same_rank(self) -> None:
-        retweeter = self._retweeter_with_dedicated_comment("寿司")
-        search = [_food_tweet("search_meat", "焼肉たべた")]
-        timeline = [_food_tweet("sushi", "寿司たべた"), _food_tweet("timeline_meat", "牛肉")]
-
-        _, post = self._run(retweeter, timeline, search)
-
-        self.assertEqual(post.call_args.args[0], "timeline_meat")
-
     def test_cut_names_without_the_meat_character_count_as_meat(self) -> None:
         retweeter = _make_retweeter()
         for text in ["牛スジでカレーを作った", "カレーの具に豚タン"]:
@@ -711,10 +702,8 @@ class CommentCheckTests(TestCase):
         self.assertEqual(results["comment_checks"], 0)
 
 
-class MeatFocusTests(TestCase):
-    """肉が入っていても主役ではない投稿を、肉の話題として最優先にしないことの確認
-    （2026-10-20、牛肉の乗ったそうめんのレシピを、写真に肉が写っていて本文に「焼肉のタレ」があるため
-    肉の話題として引用した）"""
+class _MeatFocusRunner:
+    """肉が主役かの判定を差し替えて check_and_quote_tweets を1回走らせる"""
 
     def _run(
         self,
@@ -723,6 +712,7 @@ class MeatFocusTests(TestCase):
         photo_verdicts: Dict[str, PhotoVerdict] | None = None,
         dedicated: list[tuple[str, list[str]]] | None = None,
         max_checks: int = 10,
+        search: list[SimpleNamespace] | None = None,
     ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
         client = mock.MagicMock()
         client.system_one.return_value = _jev_response(SAFE_NOULS)
@@ -747,13 +737,19 @@ class MeatFocusTests(TestCase):
 
         with (
             mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
-            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=search or []),
             mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
             mock.patch("nikune.auto_quote_retweeter.judge_meat_focus", side_effect=judge) as judge_mock,
             mock.patch("nikune.auto_quote_retweeter.MEAT_FOCUS_CHECK_MAX_PER_RUN", max_checks),
         ):
             results = retweeter.check_and_quote_tweets()
         return results, post, judge_mock
+
+
+class MeatFocusTests(_MeatFocusRunner, TestCase):
+    """肉が入っていても主役ではない投稿を、肉の話題として最優先にしないことの確認
+    （2026-10-20、牛肉の乗ったそうめんのレシピを、写真に肉が写っていて本文に「焼肉のタレ」があるため
+    肉の話題として引用した）"""
 
     def test_meat_as_a_side_ingredient_loses_to_a_real_meat_post(self) -> None:
         photo_verdicts = {"noodles": PhotoVerdict(is_food=True, shows_meat=True, dishes=["牛肉"])}
@@ -813,7 +809,74 @@ class MeatFocusTests(TestCase):
         results: Dict[str, Any] = {"meat_focus_checked": 0, "meat_focus_unavailable": 0, "not_meat_main": 0}
 
         with mock.patch("nikune.auto_quote_retweeter.judge_meat_focus") as judge:
-            not_meat = retweeter._check_meat_focus([_food_tweet("t1", "焼肉たべた")], {}, results)
+            not_meat, meat_main = retweeter._check_meat_focus([_food_tweet("t1", "焼肉たべた")], {}, results)
 
         judge.assert_not_called()
         self.assertEqual(not_meat, set())
+        self.assertEqual(meat_main, set())
+
+
+class SearchCandidateTests(_MeatFocusRunner, TestCase):
+    """検索APIで見つけたフォロー外の人は、写真付きで肉が主役の投稿だけを、タイムラインの候補すべての後に引用する
+    （10/24〜11/5の引用9件のうち6件がフォロー外で、写真のない式典の告知や、地名と料理名だけの短い投稿にも引用していた）"""
+
+    def _search_tweet(self, tweet_id: str, text: str, photo: bool = True) -> SimpleNamespace:
+        tweet = _photo_tweet(tweet_id, text) if photo else _food_tweet(tweet_id, text)
+        tweet.author_username = f"stranger_{tweet_id}"
+        return tweet
+
+    def test_timeline_dedicated_comment_food_comes_before_search_meat(self) -> None:
+        search = [self._search_tweet("search_meat", "唐揚げ定食")]
+        timeline = [_food_tweet("sushi", "寿司たべた")]
+
+        results, post, _ = self._run(
+            {"search_meat": 0.91}, timeline, dedicated=[("寿司", ["寿司のセリフ"])], search=search
+        )
+
+        self.assertEqual(post.call_args.args[0], "sushi")
+
+    def test_search_meat_main_with_photo_is_quoted_when_timeline_has_nothing(self) -> None:
+        search = [self._search_tweet("kakuni", "豚の角煮")]
+
+        results, post, _ = self._run({"kakuni": 0.94}, [], search=search)
+
+        self.assertEqual(post.call_args.args[0], "kakuni")
+
+    def test_search_without_photo_is_not_quoted(self) -> None:
+        search = [self._search_tweet("beef", "神戸ビーフの式典に出席", photo=False)]
+
+        results, post, judge = self._run({"beef": 0.89}, [], search=search)
+
+        post.assert_not_called()
+        judge.assert_not_called()
+        self.assertEqual(results["skipped_search_no_photo"], 1)
+
+    def test_search_not_meat_main_is_not_quoted_even_with_a_dedicated_comment(self) -> None:
+        search = [self._search_tweet("ramen", "ラーメン チャーシュー")]
+
+        results, post, _ = self._run({"ramen": 0.1}, [], dedicated=[("ラーメン", ["ラーメンのセリフ"])], search=search)
+
+        post.assert_not_called()
+        self.assertEqual(results["skipped_search_not_meat_main"], 1)
+
+    def test_search_is_not_quoted_when_meat_focus_is_unavailable(self) -> None:
+        search = [self._search_tweet("steak", "ステーキたべた")]
+
+        results, post, _ = self._run({}, [], search=search)
+
+        post.assert_not_called()
+        self.assertEqual(results["meat_focus_unavailable"], 1)
+        self.assertEqual(results["skipped_search_not_meat_main"], 1)
+
+    def test_search_is_not_fetched_without_a_jev_key(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+        retweeter.dry_run = False
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=[_food_tweet("t1", "焼肉たべた")]),
+            mock.patch.object(retweeter, "_fetch_search_candidates") as fetch_search,
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+        ):
+            retweeter.check_and_quote_tweets()
+
+        fetch_search.assert_not_called()
+        self.assertEqual(post.call_args.args[0], "t1")
