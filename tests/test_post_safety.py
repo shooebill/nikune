@@ -147,6 +147,18 @@ class DecisionTests(TestCase):
         self.assertIn(f"{PERSONA_KEY}~0.5(uncertain)", reasons)
         self.assertEqual(post_safety.decide({PERSONA_KEY: 0.9, PROMOTION_KEY: 0.02, OFFENSIVE_KEY: 0.02}), [])
 
+    def test_offensive_threshold_is_higher_than_promotional(self) -> None:
+        # キャラのギャグのセリフは誤解・不快が 0.30〜0.32 で出るので、0.35 未満は警告しない
+        self.assertEqual(post_safety.decide({PERSONA_KEY: 0.9, PROMOTION_KEY: 0.02, OFFENSIVE_KEY: 0.32}), [])
+        self.assertEqual(
+            post_safety.decide({PERSONA_KEY: 0.9, PROMOTION_KEY: 0.02, OFFENSIVE_KEY: 0.35}),
+            [f"{OFFENSIVE_KEY}>=0.35"],
+        )
+        self.assertEqual(
+            post_safety.decide({PERSONA_KEY: 0.9, PROMOTION_KEY: 0.32, OFFENSIVE_KEY: 0.02}),
+            [f"{PROMOTION_KEY}>=0.3"],
+        )
+
     def test_api_failure_is_unchecked_and_still_posts(self) -> None:
         checker = StubChecker(JevResult(status="error", error="APIConnectionError: boom"))
         with self.assertLogs("nikune.post_safety", level="WARNING") as captured:

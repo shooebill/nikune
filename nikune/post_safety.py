@@ -51,6 +51,9 @@ BLOCK_ON_UNCHECKED = False
 # 実運用のログ（各 Noul の値）を見てから調整すること。
 # あいまい帯（0.5 ± quote_safety.UNCERTAIN_MARGIN）は quote_safety.is_uncertain() をそのまま使って揃える
 AVOID_THRESHOLD = 0.3
+# 誤解・不快だけは 0.35（2026-11）。キャラのギャグのセリフ（食べると腰が抜けて痺れる、など）が毎回 0.30〜0.32 で
+# 警告になり、Slack の通知が同じ数本で鳴り続けたため。宣伝っぽさは AVOID_THRESHOLD のまま
+OFFENSIVE_THRESHOLD = 0.35
 PERSONA_CONSISTENT_THRESHOLD = 0.7
 
 # --- 質問 -----------------------------------------------------------------
@@ -208,8 +211,9 @@ def decide(nouls: Dict[str, float]) -> List[str]:
     """Noul の値から「問題あり」とみなす理由を列挙する（空なら OK）。止めるかどうかは should_post() が決める"""
     reasons: List[str] = []
     for key in AVOID_KEYS:
-        if key in nouls and nouls[key] >= AVOID_THRESHOLD:
-            reasons.append(f"{key}>={AVOID_THRESHOLD}")
+        threshold = OFFENSIVE_THRESHOLD if key == OFFENSIVE_KEY else AVOID_THRESHOLD
+        if key in nouls and nouls[key] >= threshold:
+            reasons.append(f"{key}>={threshold}")
     if PERSONA_KEY in nouls and nouls[PERSONA_KEY] < PERSONA_CONSISTENT_THRESHOLD:
         reasons.append(f"{PERSONA_KEY}<{PERSONA_CONSISTENT_THRESHOLD}")
     for key, value in nouls.items():
