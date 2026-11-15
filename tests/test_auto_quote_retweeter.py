@@ -5,7 +5,8 @@ from unittest import TestCase, mock
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
 from nikune.jev_checker import JevChecker
 from nikune.meat_focus import MEAT_MAIN_KEY, MeatFocusVerdict
-from nikune.photo_checker import CommentVerdict, PhotoChecker, PhotoVerdict
+from nikune.photo_checker import CommentVerdict, PhotoChecker, PhotoVerdict, WrittenComment
+from nikune.post_safety import PostSafetyVerdict
 from nikune.quote_safety import AVOID_KEYS, SUITABLE_KEY, VALUE_SCORE_KEY, decide, is_uncertain
 from nikune.twitter_client import TwitterClient
 
@@ -700,6 +701,128 @@ class CommentCheckTests(TestCase):
 
         self.assertTrue(comment)
         self.assertEqual(results["comment_checks"], 0)
+
+
+class WrittenCommentTests(TestCase):
+    """料理の写真がない投稿にはセリフを書かせ、料理の写真がある投稿はテンプレートから選ぶことの確認"""
+
+    WRITTEN = "テスト用に書いたセリフ"
+    DEDICATED = "テスト用の専用コメント"
+
+    def _run(
+        self,
+        timeline: list[SimpleNamespace],
+        photo_verdicts: Dict[str, PhotoVerdict] | None = None,
+        written: list[str | None] | None = None,
+        fits: bool = True,
+        safety: str = "ok",
+        has_persona: bool = True,
+    ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
+        photo_checker = mock.MagicMock(spec=PhotoChecker)
+        photo_checker.enabled = True
+        photo_checker.check.side_effect = lambda url, dishes, text: (photo_verdicts or {}).get(
+            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        )
+        photo_checker.write_comment.side_effect = [
+            None if text is None else WrittenComment(text=text, model="writer") for text in (written or [self.WRITTEN])
+        ]
+        photo_checker.comment_fits.return_value = CommentVerdict(fits=fits, reason="test")
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True, photo_checker=photo_checker)
+        retweeter.dry_run = False
+        retweeter.persona = [{"content": "テスト用のペルソナ"}] if has_persona else None
+        retweeter.content_generator._specific_keyword_comments = [("寿司", [self.DEDICATED])]
+        with (
+            mock.patch.object(retweeter, "_fetch_timeline_with_retry", return_value=timeline),
+            mock.patch.object(retweeter, "_fetch_search_candidates", return_value=[]),
+            mock.patch.object(retweeter.twitter_client, "pseudo_quote_tweet", return_value="q1") as post,
+            mock.patch(
+                "nikune.auto_quote_retweeter.post_safety.evaluate_post",
+                return_value=PostSafetyVerdict(decision=safety),  # type: ignore[arg-type]
+            ),
+        ):
+            results = retweeter.check_and_quote_tweets()
+        return results, post, photo_checker
+
+    def test_post_without_a_photo_gets_a_written_comment(self) -> None:
+        results, post, photo_checker = self._run([_food_tweet("t1", "寿司を食べに行く予定")])
+
+        self.assertEqual(post.call_args.args[2], f"🐻 {self.WRITTEN}")
+        text, persona, examples, photo_url = photo_checker.write_comment.call_args.args
+        self.assertEqual(text, "寿司を食べに行く予定")
+        self.assertEqual(persona, [{"content": "テスト用のペルソナ"}])
+        self.assertIn(self.DEDICATED, examples)
+        self.assertIsNone(photo_url)
+        self.assertEqual(photo_checker.comment_fits.call_args.args[0], f"🐻 {self.WRITTEN}")
+        self.assertEqual(results["written_comments"], 1)
+
+    def test_meat_topic_gets_a_meat_emoji_on_the_written_comment(self) -> None:
+        _, post, _ = self._run([_food_tweet("t1", "厚切り牛タンを食べてみたい")])
+
+        self.assertTrue(post.call_args.args[2].startswith(f"🐻 {self.WRITTEN} "))
+        self.assertIn(post.call_args.args[2][-1], {"🥩", "🍖"})
+
+    def test_post_with_a_food_photo_uses_the_template(self) -> None:
+        verdicts = {"t1": PhotoVerdict(is_food=True, shows_meat=False, dishes=["寿司"])}
+
+        _, post, photo_checker = self._run([_photo_tweet("t1", "寿司")], verdicts)
+
+        self.assertIn(self.DEDICATED, post.call_args.args[2])
+        photo_checker.write_comment.assert_not_called()
+
+    def test_post_with_a_non_food_photo_gets_a_written_comment_with_the_photo(self) -> None:
+        verdicts = {"gate": PhotoVerdict(is_food=False, shows_meat=False, dishes=[])}
+
+        _, post, photo_checker = self._run([_photo_tweet("gate", "今年最後の福岡。寿司3軒を訪問予定")], verdicts)
+
+        self.assertEqual(post.call_args.args[2], f"🐻 {self.WRITTEN}")
+        self.assertEqual(photo_checker.write_comment.call_args.args[3], "https://example.com/gate.jpg")
+
+    def test_without_persona_the_template_is_used(self) -> None:
+        _, post, photo_checker = self._run([_food_tweet("t1", "寿司たべた")], has_persona=False)
+
+        self.assertIn(self.DEDICATED, post.call_args.args[2])
+        photo_checker.write_comment.assert_not_called()
+
+    def test_persona_is_not_loaded_when_the_file_is_missing(self) -> None:
+        retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True)
+
+        self.assertIsNone(retweeter.persona)
+
+    def test_nothing_is_quoted_when_writing_is_unavailable(self) -> None:
+        timeline = [_food_tweet("t1", "寿司を食べに行く予定"), _food_tweet("t2", "寿司たべたい")]
+
+        results, post, photo_checker = self._run(timeline, written=[None])
+
+        post.assert_not_called()
+        self.assertEqual(results["comment_check_unavailable"], 1)
+        self.assertEqual(photo_checker.write_comment.call_count, 1)
+
+    def test_unusable_written_comment_moves_on_to_the_next_candidate(self) -> None:
+        timeline = [_food_tweet("t1", "寿司を食べに行く予定"), _food_tweet("t2", "寿司たべたい")]
+
+        results, post, _ = self._run(timeline, written=["絵文字入り🍣", self.WRITTEN])
+
+        self.assertEqual(post.call_args.args[0], "t2")
+        self.assertEqual(results["written_comment_rejected"], 1)
+
+    def test_written_comment_that_does_not_fit_is_not_posted(self) -> None:
+        results, post, _ = self._run([_food_tweet("t1", "寿司を食べに行く予定")], fits=False)
+
+        post.assert_not_called()
+        self.assertEqual(results["written_comment_rejected"], 1)
+
+    def test_written_comment_with_a_jev_warning_or_no_check_is_not_posted(self) -> None:
+        for decision in ["warn", "unchecked"]:
+            with self.subTest(decision=decision):
+                results, post, _ = self._run([_food_tweet("t1", "寿司を食べに行く予定")], safety=decision)
+
+                post.assert_not_called()
+                self.assertEqual(results["written_comment_rejected"], 1)
+
+    def test_written_comment_is_used_without_a_jev_key(self) -> None:
+        _, post, _ = self._run([_food_tweet("t1", "寿司を食べに行く予定")], safety="disabled")
+
+        self.assertEqual(post.call_args.args[2], f"🐻 {self.WRITTEN}")
 
 
 class _MeatFocusRunner:

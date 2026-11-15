@@ -5,6 +5,7 @@ from typing import Iterator
 import pytest
 
 from config import settings
+from nikune import post_safety
 from nikune.content_generator import ContentGenerator
 
 
@@ -26,4 +27,11 @@ def _disable_real_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
 def _ignore_local_quote_comments(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """ローカルに非公開のdata/quote_comments.tsvがあっても読まず、どの環境でもフォールバック文言でテストする"""
     monkeypatch.setattr(ContentGenerator, "QUOTE_COMMENTS_FILE", "data/quote_comments.nonexistent.tsv")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _ignore_local_persona(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """ローカルに非公開のdata/persona.tsvがあっても読まず、どの環境でもペルソナなしとしてテストする"""
+    monkeypatch.setattr(post_safety, "PERSONA_FILE", "data/persona.nonexistent.tsv")
     yield

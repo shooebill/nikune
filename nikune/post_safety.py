@@ -228,8 +228,13 @@ def evaluate_post(
     route: str,
     template_id: Optional[int] = None,
     persona_path: str = PERSONA_FILE,
+    block_on_problem: bool = False,
 ) -> PostSafetyVerdict:
-    """投稿文を Jev で判定し、1行のログを残して結果を返す。例外は投げない"""
+    """投稿文を Jev で判定し、1行のログを残して結果を返す。例外は投げない
+
+    block_on_problem: 呼び出し側が警告・チェック不能のときに投稿を止める場合 True（ログの action を
+        「blocked」にする）。引用RTで書かせたセリフに使う。独り言は BLOCK_ON_WARN の設定に従う
+    """
     try:
         persona = load_persona(persona_path) if checker.enabled else None
         result = checker.ask(build_post_state(text, persona), build_post_questions(persona is not None))
@@ -251,7 +256,7 @@ def evaluate_post(
     except Exception as e:  # noqa: BLE001 - 判定ロジック側の想定外エラーでも投稿は止めない
         verdict = PostSafetyVerdict(decision="unchecked", error=f"{type(e).__name__}: {e}")
 
-    message = format_verdict_log(route, template_id, verdict)
+    message = format_verdict_log(route, template_id, verdict, block_on_problem)
     if verdict.decision in ("warn", "unchecked"):
         logger.warning(message)
     else:
@@ -259,7 +264,9 @@ def evaluate_post(
     return verdict
 
 
-def format_verdict_log(route: str, template_id: Optional[int], verdict: PostSafetyVerdict) -> str:
+def format_verdict_log(
+    route: str, template_id: Optional[int], verdict: PostSafetyVerdict, block_on_problem: bool = False
+) -> str:
     """投稿ごとの1行ログ: 経路・テンプレートID・各 Noul・最終判断（投稿本文は出さない）"""
     nouls = " ".join(f"{k}={v:.2f}" for k, v in verdict.nouls.items()) or "-"
     parts = [
@@ -273,10 +280,10 @@ def format_verdict_log(route: str, template_id: Optional[int], verdict: PostSafe
     if verdict.reasons:
         parts.append(f"reasons={','.join(verdict.reasons)}")
     if verdict.decision == "warn":
-        action = "blocked" if not should_post(verdict) else "posting anyway (warn-only mode)"
+        action = "blocked" if block_on_problem or not should_post(verdict) else "posting anyway (warn-only mode)"
         parts.append(f"action={action}")
     if verdict.decision == "unchecked":
-        action = "blocked" if not should_post(verdict) else "posting without the check"
+        action = "blocked" if block_on_problem or not should_post(verdict) else "posting without the check"
         parts.append(f"action={action}")
     if verdict.model:
         parts.append(f"model={verdict.model}")

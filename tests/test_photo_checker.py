@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import TestCase, mock
 
-from nikune.photo_checker import PhotoChecker, _CommentAnswer, _PhotoAnswer
+from nikune.photo_checker import PhotoChecker, _CommentAnswer, _PhotoAnswer, _WrittenAnswer
 
 DISHES = ["寿司", "焼肉", "ラーメン"]
 
@@ -121,3 +121,60 @@ class CommentFitsTests(TestCase):
                     client.messages.parse.return_value = outcome
 
                 self.assertIsNone(_checker(client).comment_fits("肉ね！", "焼肉たべた"))
+
+
+PERSONA = [{"category": "口調", "item": "語尾", "content": "テスト用の語尾", "note": "テスト用の補足"}]
+
+
+class WriteCommentTests(TestCase):
+    def _writer(self, client: Any) -> PhotoChecker:
+        return PhotoChecker(
+            api_key=None, model="judge-model", timeout_seconds=1, client=client, writer_model="writer-model"
+        )
+
+    def test_without_key_it_returns_none(self) -> None:
+        checker = PhotoChecker(api_key=None, model="test-model", timeout_seconds=1)
+
+        self.assertIsNone(checker.write_comment("焼肉たべたい", PERSONA, ["例のセリフ"]))
+
+    def test_written_text_is_returned_stripped_with_the_model(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_WrittenAnswer(text="  書いたセリフ \n"))
+
+        written = self._writer(client).write_comment("焼肉たべたい", PERSONA, ["例のセリフ"])
+
+        assert written is not None
+        self.assertEqual(written.text, "書いたセリフ")
+        self.assertEqual(written.model, "test-model")
+
+    def test_the_writer_model_persona_examples_and_post_are_sent(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_WrittenAnswer(text="書いたセリフ"))
+
+        self._writer(client).write_comment("焼肉たべたい", PERSONA, ["例のセリフ"], "https://example.com/a.jpg")
+
+        kwargs = client.messages.parse.call_args.kwargs
+        image, text = kwargs["messages"][0]["content"]
+        self.assertEqual(image["source"], {"type": "url", "url": "https://example.com/a.jpg"})
+        self.assertIn("口調 / 語尾: テスト用の語尾（テスト用の補足）", text["text"])
+        self.assertIn("- 例のセリフ", text["text"])
+        self.assertIn("焼肉たべたい", text["text"])
+        self.assertEqual(kwargs["model"], "writer-model")
+        self.assertEqual(kwargs["output_config"], {"effort": "medium"})
+
+    def test_checks_still_use_the_judge_model(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_CommentAnswer(fits=True, reason="ok"))
+
+        self._writer(client).comment_fits("肉ね！", "焼肉たべた")
+
+        self.assertEqual(client.messages.parse.call_args.kwargs["model"], "judge-model")
+        self.assertEqual(client.messages.parse.call_args.kwargs["output_config"], {"effort": "low"})
+
+    def test_api_failure_returns_none_and_logs_the_marker(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.side_effect = RuntimeError("boom")
+
+        with self.assertLogs("nikune.photo_checker", level="WARNING") as logs:
+            self.assertIsNone(self._writer(client).write_comment("焼肉たべたい", PERSONA, []))
+        self.assertIn("📷 Comment writing unavailable", logs.output[0])

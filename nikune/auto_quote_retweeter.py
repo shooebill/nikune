@@ -22,6 +22,7 @@ from config.settings import (
     QUOTE_RETWEET_MIN_PRIORITY_SCORE,
     QUOTE_RETWEET_SAME_AUTHOR_COOLDOWN_DAYS,
 )
+from nikune import post_safety
 from nikune.content_generator import ContentGenerator
 from nikune.database import DatabaseManager
 from nikune.jev_checker import JevChecker
@@ -77,6 +78,9 @@ class AutoQuoteRetweeter:
         self.dry_run = dry_run
         self.jev_checker = jev_checker if jev_checker is not None else JevChecker.from_settings()
         self.photo_checker = photo_checker if photo_checker is not None else PhotoChecker.from_settings()
+        # 料理の写真がない投稿にセリフを書かせるときに渡す本番ペルソナ（gitignore 対象）。
+        # ファイルがない環境では書かせず、従来どおりテンプレートから選ぶ
+        self.persona = post_safety.load_persona(post_safety.PERSONA_FILE)
         self.twitter_client = TwitterClient(dry_run=dry_run)
         self.content_generator = ContentGenerator(db_manager)
         self.bot_name = BOT_NAME
@@ -164,6 +168,8 @@ class AutoQuoteRetweeter:
                 "skipped_search_not_meat_main": 0,
                 "skipped_no_fitting_comment": 0,
                 "skipped_comment_mismatch": 0,
+                "written_comments": 0,
+                "written_comment_rejected": 0,
                 "comment_checks": 0,
                 "comment_check_unavailable": 0,
                 "photo_checked": 0,
@@ -269,7 +275,8 @@ class AutoQuoteRetweeter:
                     results["errors"].append(error_msg)
 
             # 写真付きの候補は写真も見る（本文が店名や日付だけでも、何の料理か・肉が写っているかが分かる）
-            photo_keywords = self._check_photos(candidates, search_tweet_ids, results)
+            food_photo_ids: set[Any] = set()
+            photo_keywords = self._check_photos(candidates, search_tweet_ids, results, food_photo_ids)
 
             # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
             # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
@@ -355,7 +362,15 @@ class AutoQuoteRetweeter:
                         if results["comment_checks"] >= COMMENT_CHECK_MAX_PER_RUN:
                             logger.info("⏹️ Comment check limit reached, stopping further quotes in this run")
                             break
-                        comment = self._fitting_comment(tweet, posted_at, from_photo, score_info, results, exclude_meat)
+                        comment = self._fitting_comment(
+                            tweet,
+                            posted_at,
+                            from_photo,
+                            score_info,
+                            results,
+                            exclude_meat,
+                            food_photo=tweet.id in food_photo_ids,
+                        )
                         if results["comment_check_unavailable"] > 0:
                             # 確かめられないセリフは投稿しない。障害はほかの候補でも同じなので、この回はここで終える。
                             # 一時的な障害で候補を失わないよう処理済みにはしない
@@ -437,6 +452,11 @@ class AutoQuoteRetweeter:
                     f"📊 Skipped {results['skipped_no_fitting_comment']} food tweets "
                     "that are not about meat and have no dedicated comment"
                 )
+            if results["written_comments"] > 0:
+                logger.info(
+                    f"✍️ Written comments: {results['written_comments']}, "
+                    f"rejected {results['written_comment_rejected']}"
+                )
             if results["skipped_comment_mismatch"] > 0:
                 logger.info(
                     f"📊 Skipped {results['skipped_comment_mismatch']} food tweets "
@@ -513,13 +533,18 @@ class AutoQuoteRetweeter:
         return sorted(tweets, key=sort_key)
 
     def _check_photos(
-        self, candidates: List[Any], search_tweet_ids: set[Any], results: Dict[str, Any]
+        self,
+        candidates: List[Any],
+        search_tweet_ids: set[Any],
+        results: Dict[str, Any],
+        food_photo_ids: Optional[set[Any]] = None,
     ) -> Dict[Any, List[str]]:
         """写真付きの候補の1枚目を見て、写真から分かったキーワードを返す（ツイートID → キーワード）
 
         写真に肉が写っていれば PHOTO_MEAT_KEYWORD を、料理名が分かればそのキーワードを入れる。
         食べ物の写真でなかった候補・判定できなかった候補・写真のない候補はキーに含めない
         （本文だけのルールで扱う）。見るのは1回の実行で PHOTO_CHECK_MAX_PER_RUN 件まで。
+        food_photo_ids を渡すと、料理の写真と判定した候補のIDを入れる（セリフの選び方を分けるのに使う）。
         """
         photo_keywords: Dict[Any, List[str]] = {}
         if not self.photo_checker.enabled:
@@ -541,6 +566,8 @@ class AutoQuoteRetweeter:
                 continue
 
             results["photo_checked"] += 1
+            if verdict.is_food and food_photo_ids is not None:
+                food_photo_ids.add(tweet.id)
             keywords = list(verdict.dishes)
             if verdict.shows_meat:
                 keywords.append(self.content_generator.PHOTO_MEAT_KEYWORD)
@@ -602,23 +629,35 @@ class AutoQuoteRetweeter:
         score_info: Dict[str, Any],
         results: Dict[str, Any],
         exclude_meat: bool = False,
+        food_photo: bool = True,
     ) -> Optional[str]:
         """投稿の内容と食い違わないセリフを返す。合うものがなければ None
 
-        セリフはキーワードの一致で選んでいて、文の意味は見ていない（「豚肉なのに『やきとり』と呼ぶ」という
-        投稿に、鶏肉と言い切る焼き鳥のセリフを付けたことがあった）。選んだセリフを Claude に見せ、
+        料理の写真がある投稿（food_photo）はテンプレートから選ぶ。テンプレートのセリフは目の前の料理への
+        反応として書いてあるためである。写真がない・写真が料理ではない・写真を見ていない投稿には、
+        投稿に合わせたセリフを書かせる（_written_comment）。本番ペルソナのファイルがない環境では書かせず、
+        テンプレートから選ぶ。
+
+        テンプレートのセリフはキーワードの一致で選んでいて、文の意味は見ていない（「豚肉なのに『やきとり』と
+        呼ぶ」という投稿に、鶏肉と言い切る焼き鳥のセリフを付けたことがあった）。選んだセリフを Claude に見せ、
         食い違っていたら汎用の文言で選び直す。汎用の文言は肉のセリフなので、肉の話題でなければ選び直さない。
         キーが未設定の環境では照合せず、選んだセリフをそのまま使う。キーがあるのに判定できなかったとき
         （API失敗・クレジット切れ）は results["comment_check_unavailable"] を増やして None を返す。
         """
-        comment = self.content_generator.generate_quote_comment(
-            tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
-        )
         if not self.photo_checker.enabled:
-            return comment
+            return self.content_generator.generate_quote_comment(
+                tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
+            )
 
         photo_urls = getattr(tweet, "photo_urls", None) or []
         photo_url = photo_urls[0] if photo_urls else None
+
+        if not food_photo and self.persona is not None:
+            return self._written_comment(tweet, photo_url, score_info, results)
+
+        comment = self.content_generator.generate_quote_comment(
+            tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
+        )
 
         # 1本目は選ばれたセリフ、2本目は専用コメントを使わない汎用の文言
         for attempt in range(2):
@@ -633,10 +672,63 @@ class AutoQuoteRetweeter:
             if verdict is None:
                 results["comment_check_unavailable"] += 1
                 return None
-            logger.info(f"🗣️ Comment check: tweet={tweet.id} fits={verdict.fits} reason={verdict.reason}")
+            logger.info(
+                f"🗣️ Comment check: tweet={tweet.id} source=template fits={verdict.fits} reason={verdict.reason}"
+            )
             if verdict.fits:
                 return comment
         return None
+
+    def _written_comment(
+        self, tweet: Any, photo_url: Optional[str], score_info: Dict[str, Any], results: Dict[str, Any]
+    ) -> Optional[str]:
+        """料理の写真がない投稿に、投稿に合わせたセリフを書かせて返す。使えるものが書けなければ None
+
+        書いたセリフは、形（1行・短い・絵文字やURLなし）とNGワード、投稿との照合、Jev の投稿直前チェック
+        （ペルソナとの一致を含む）を通ったときだけ使う。書き直しはしない。Claude に書かせられなかったとき・
+        照合できなかったときは results["comment_check_unavailable"] を増やす（その回は引用しない）。
+        """
+        written = self.photo_checker.write_comment(
+            tweet.text, self.persona or [], self.content_generator.quote_comment_examples(), photo_url
+        )
+        if written is None:
+            results["comment_check_unavailable"] += 1
+            return None
+        results["written_comments"] += 1
+
+        problem = self.content_generator.written_quote_comment_problem(written.text)
+        if problem:
+            results["written_comment_rejected"] += 1
+            logger.info(f"✍️ Written comment rejected: tweet={tweet.id} reason={problem} text={written.text!r}")
+            return None
+
+        comment = self.content_generator.decorate_quote_comment(written.text, score_info["is_meat_topic"])
+        logger.info(f"✍️ Written comment: tweet={tweet.id} model={written.model} text={comment}")
+
+        results["comment_checks"] += 1
+        verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
+        if verdict is None:
+            results["comment_check_unavailable"] += 1
+            return None
+        logger.info(f"🗣️ Comment check: tweet={tweet.id} source=written fits={verdict.fits} reason={verdict.reason}")
+        if not verdict.fits:
+            results["written_comment_rejected"] += 1
+            return None
+
+        # 書いたセリフはテンプレートと違って人が読んでいないので、Jev の投稿直前チェックで口調も確かめる。
+        # 警告が出たとき・チェックできなかったときは使わない（キー未設定の環境ではチェックせずに使う）
+        safety = post_safety.evaluate_post(
+            self.jev_checker,
+            comment,
+            route="quote_written",
+            persona_path=post_safety.PERSONA_FILE,
+            block_on_problem=True,
+        )
+        if safety.decision in ("warn", "unchecked"):
+            results["written_comment_rejected"] += 1
+            logger.info(f"✍️ Written comment rejected: tweet={tweet.id} reason=post safety {safety.label}")
+            return None
+        return comment
 
     def _restore_rate_limit_state(self) -> None:
         """DBの引用RT履歴から、直近の投稿をレート制限の状態（最終投稿時刻・1時間内の投稿）に反映する"""

@@ -64,6 +64,10 @@ PHOTO_CHECK_TIMEOUT_SECONDS = float(os.getenv("PHOTO_CHECK_TIMEOUT_SECONDS", "30
 PHOTO_CHECK_MAX_PER_RUN = int(os.getenv("PHOTO_CHECK_MAX_PER_RUN", "5"))
 # セリフが投稿の内容と食い違っていないかを確かめる回数の上限（1回の実行あたり。超えたらその回は引用しない）
 COMMENT_CHECK_MAX_PER_RUN = int(os.getenv("COMMENT_CHECK_MAX_PER_RUN", "6"))
+# 料理の写真がない投稿に、投稿に合わせたセリフを書かせるモデル（書いたセリフは照合・NGワード・
+# Jev のペルソナ一致チェックを通してから使う）。Haiku 5.5 でも試したが、どの投稿にも同じ型の
+# 返事をしてペルソナの口調が薄かったため、Opus にしている（1回あたり約$0.014）
+QUOTE_COMMENT_MODEL = (os.getenv("QUOTE_COMMENT_MODEL") or "").strip() or "claude-opus-5-5"
 
 
 # NGワードリスト（環境変数または設定ファイルから読み込み）

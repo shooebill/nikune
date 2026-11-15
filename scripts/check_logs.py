@@ -73,6 +73,7 @@ FAILURE_MARKERS = (
 CLAUDE_UNAVAILABLE_MARKERS = (
     "📷 Photo check unavailable",
     "📷 Comment check unavailable",
+    "📷 Comment writing unavailable",
 )
 CLAUDE_UNAVAILABLE_REASON = "Claude で写真・セリフを判定できませんでした"
 
