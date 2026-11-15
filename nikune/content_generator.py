@@ -14,7 +14,7 @@ from typing import Any, Dict, List, NamedTuple, Optional
 from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
 from .database import DatabaseManager
-from .emoji_rules import SIGNATURE_EMOJI, find_emoji_rule_violations
+from .emoji_rules import SIGNATURE_EMOJI, extract_emojis, find_emoji_rule_violations
 from .twitter_client import _safe_text_length
 
 # ログ設定
@@ -1003,6 +1003,45 @@ class ContentGenerator:
             if keyword in matched_keywords:
                 return comments
         return []
+
+    # 書かせたセリフ（絵文字を付ける前）の最大文字数。プロンプトでは全角30文字までと伝え、少し余裕を持たせる
+    MAX_WRITTEN_COMMENT_LENGTH = 40
+    # 手本として渡すセリフの最大本数
+    MAX_QUOTE_COMMENT_EXAMPLES = 15
+
+    def quote_comment_examples(self) -> List[str]:
+        """セリフを書かせるときに口調の手本として渡す、テンプレートのセリフ（絵文字なし、最大15本）"""
+        texts: List[str] = []
+        for _, comments in self._specific_keyword_comments:
+            texts.extend(comments)
+        texts.extend(self._high_priority_comments + self._medium_priority_comments + self._default_quote_comments)
+        unique = list(dict.fromkeys(text for text in texts if text))
+        if len(unique) <= self.MAX_QUOTE_COMMENT_EXAMPLES:
+            return unique
+        return random.sample(unique, self.MAX_QUOTE_COMMENT_EXAMPLES)
+
+    def written_quote_comment_problem(self, text: str) -> Optional[str]:
+        """書かせたセリフに使えない理由があれば返す（使えるなら None）
+
+        プロンプトで頼んだ形（1行・短い・絵文字やURLなし）になっているかと、NGワードを確かめる。
+        """
+        if not text.strip():
+            return "empty"
+        if "\n" in text or "\r" in text:
+            return "multiple lines"
+        if len(text) > self.MAX_WRITTEN_COMMENT_LENGTH:
+            return f"longer than {self.MAX_WRITTEN_COMMENT_LENGTH} characters"
+        if re.search(r"https?://|[@＠#＃]", text):
+            return "contains a URL, mention, or hashtag"
+        if extract_emojis(text):
+            return "contains emoji"
+        if self._ng_pattern and self._ng_pattern.search(text):
+            return "contains an NG word"
+        return None
+
+    def decorate_quote_comment(self, text: str, is_meat_topic: bool) -> str:
+        """書かせたセリフに、テンプレートのセリフと同じ絵文字ルール（🐻署名＋肉の話題なら🥩🍖）を付ける"""
+        return self._decorate_comment(text, is_meat_topic)
 
     def has_dedicated_quote_comment(self, matched_keywords: List[str]) -> bool:
         """マッチしたキーワードのどれかに専用コメントがあるか

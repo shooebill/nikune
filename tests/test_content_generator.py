@@ -344,3 +344,46 @@ class QuoteTimePhraseAttachmentTests(TestCase):
             self.generator._load_quote_comments()
 
         self.assertEqual(self.generator._time_phrases, {"time_dinner": ["夜の一言A", "夜の一言B"]})
+
+
+class WrittenQuoteCommentTests(TestCase):
+    """書かせたセリフの形とNGワードを確かめることの確認"""
+
+    def setUp(self) -> None:
+        self.generator = _make_generator()
+
+    def test_short_single_line_is_accepted(self) -> None:
+        self.assertIsNone(self.generator.written_quote_comment_problem("テスト用のセリフ・・・？"))
+
+    def test_unusable_texts_are_rejected(self) -> None:
+        cases = {
+            "empty": " ",
+            "multiple lines": "一行目\n二行目",
+            "too long": "あ" * 41,
+            "url": "https://example.com を見て",
+            "mention": "@someone さん",
+            "hashtag": "#グルメ",
+            "emoji": "テスト🥩",
+        }
+        for name, text in cases.items():
+            with self.subTest(name=name):
+                self.assertIsNotNone(self.generator.written_quote_comment_problem(text))
+
+    def test_ng_word_is_rejected(self) -> None:
+        self.generator._ng_pattern = re.compile("ダメな言葉")
+
+        self.assertEqual(self.generator.written_quote_comment_problem("ダメな言葉ね"), "contains an NG word")
+
+    def test_decoration_follows_the_emoji_rules(self) -> None:
+        self.assertEqual(self.generator.decorate_quote_comment("セリフ", is_meat_topic=False), "🐻 セリフ")
+        decorated = self.generator.decorate_quote_comment("セリフ", is_meat_topic=True)
+        self.assertTrue(decorated.startswith("🐻 セリフ "))
+        self.assertIn(decorated[-1], MEAT_EMOJI)
+
+    def test_examples_are_unique_and_capped(self) -> None:
+        self.generator._specific_keyword_comments = [("寿司", [f"例{i}" for i in range(20)])]
+
+        examples = self.generator.quote_comment_examples()
+
+        self.assertEqual(len(examples), ContentGenerator.MAX_QUOTE_COMMENT_EXAMPLES)
+        self.assertEqual(len(set(examples)), len(examples))

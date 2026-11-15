@@ -187,7 +187,7 @@ class NotificationTests(CheckLogsTestBase):
         self.assertIn("TypeSafe でチェックできませんでした", self.sent_message())
 
     def test_claude_unavailable_is_notified(self) -> None:
-        for label in ["Photo check", "Comment check"]:
+        for label in ["Photo check", "Comment check", "Comment writing"]:
             with self.subTest(label=label):
                 self.notifier.reset_mock()
                 warning = f"📷 {label} unavailable: BadRequestError: credit balance is too low"
