@@ -33,7 +33,7 @@ class PhotoCheckerTests(TestCase):
         checker = PhotoChecker(api_key=None, model="test-model", timeout_seconds=1)
 
         self.assertFalse(checker.enabled)
-        self.assertIsNone(checker.check("https://example.com/a.jpg", DISHES))
+        self.assertIsNone(checker.check(["https://example.com/a.jpg"], DISHES))
 
     def test_answer_is_returned_and_unknown_dishes_are_dropped(self) -> None:
         client = mock.MagicMock()
@@ -41,7 +41,7 @@ class PhotoCheckerTests(TestCase):
             _photo_answer(is_food=True, shows_meat=True, dishes=["焼肉", "一覧にない料理"])
         )
 
-        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+        verdict = _checker(client).check(["https://example.com/a.jpg"], DISHES)
 
         assert verdict is not None
         self.assertTrue(verdict.is_food)
@@ -53,7 +53,7 @@ class PhotoCheckerTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_photo_answer(is_food=False, shows_meat=False, dishes=[]))
 
-        _checker(client).check("https://example.com/a.jpg", DISHES, "豚肉の串です")
+        _checker(client).check(["https://example.com/a.jpg"], DISHES, "豚肉の串です")
 
         kwargs = client.messages.parse.call_args.kwargs
         image, text = kwargs["messages"][0]["content"]
@@ -62,11 +62,34 @@ class PhotoCheckerTests(TestCase):
         self.assertIn("豚肉の串です", text["text"])
         self.assertEqual(kwargs["model"], "test-model")
 
+    def test_all_photos_are_sent_in_order_up_to_the_limit(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_photo_answer())
+        urls = [f"https://example.com/{i}.jpg" for i in range(5)]
+        checker = PhotoChecker(api_key=None, model="test-model", timeout_seconds=1, client=client, max_photos=4)
+
+        checker.check(urls, DISHES)
+
+        content = client.messages.parse.call_args.kwargs["messages"][0]["content"]
+        self.assertEqual([part["source"]["url"] for part in content[:-1]], urls[:4])
+        self.assertEqual(content[-1]["type"], "text")
+
+    def test_token_usage_is_logged_with_the_number_of_photos(self) -> None:
+        client = mock.MagicMock()
+        response = _response(_photo_answer())
+        response.usage = SimpleNamespace(input_tokens=4321, output_tokens=56)
+        client.messages.parse.return_value = response
+
+        with self.assertLogs("nikune.photo_checker", level="INFO") as logs:
+            _checker(client).check(["https://example.com/a.jpg", "https://example.com/b.jpg"], DISHES)
+
+        self.assertTrue(any("images=2 input_tokens=4321 output_tokens=56" in line for line in logs.output))
+
     def test_non_food_photo_never_reports_meat_or_dishes(self) -> None:
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_photo_answer(is_food=False, shows_meat=True, dishes=["焼肉"]))
 
-        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+        verdict = _checker(client).check(["https://example.com/a.jpg"], DISHES)
 
         assert verdict is not None
         self.assertFalse(verdict.shows_meat)
@@ -78,7 +101,7 @@ class PhotoCheckerTests(TestCase):
             _photo_answer(shows_meat=True, meats=["鶏肉", "鶏肉"], meal="lunch", light="night")
         )
 
-        verdict = _checker(client).check("https://example.com/a.jpg", DISHES, "新店のランチ")
+        verdict = _checker(client).check(["https://example.com/a.jpg"], DISHES, "新店のランチ")
 
         assert verdict is not None
         self.assertEqual(verdict.meats, ["鶏肉"])
@@ -89,7 +112,7 @@ class PhotoCheckerTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_photo_answer())
 
-        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+        verdict = _checker(client).check(["https://example.com/a.jpg"], DISHES)
 
         assert verdict is not None
         self.assertEqual(verdict.meats, [])
@@ -100,7 +123,7 @@ class PhotoCheckerTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_photo_answer(meal="breakfast", light="day"))
 
-        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+        verdict = _checker(client).check(["https://example.com/a.jpg"], DISHES)
 
         assert verdict is not None
         self.assertEqual(verdict.meal, "morning")
@@ -110,7 +133,7 @@ class PhotoCheckerTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.side_effect = RuntimeError("boom")
 
-        self.assertIsNone(_checker(client).check("https://example.com/a.jpg", DISHES))
+        self.assertIsNone(_checker(client).check(["https://example.com/a.jpg"], DISHES))
 
     def test_refusal_or_missing_answer_returns_none(self) -> None:
         for response in [_response(None, stop_reason="refusal"), _response(None)]:
@@ -118,7 +141,7 @@ class PhotoCheckerTests(TestCase):
                 client = mock.MagicMock()
                 client.messages.parse.return_value = response
 
-                self.assertIsNone(_checker(client).check("https://example.com/a.jpg", DISHES))
+                self.assertIsNone(_checker(client).check(["https://example.com/a.jpg"], DISHES))
 
 
 class CommentFitsTests(TestCase):
@@ -141,7 +164,7 @@ class CommentFitsTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_CommentAnswer(fits=True, reason="ok"))
 
-        _checker(client).comment_fits("肉ね！", "焼肉たべた", "https://example.com/a.jpg")
+        _checker(client).comment_fits("肉ね！", "焼肉たべた", ["https://example.com/a.jpg"])
 
         image, text = client.messages.parse.call_args.kwargs["messages"][0]["content"]
         self.assertEqual(image["source"], {"type": "url", "url": "https://example.com/a.jpg"})
@@ -198,7 +221,7 @@ class WriteCommentTests(TestCase):
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(_WrittenAnswer(text="書いたセリフ"))
 
-        self._writer(client).write_comment("焼肉たべたい", PERSONA, ["例のセリフ"], "https://example.com/a.jpg")
+        self._writer(client).write_comment("焼肉たべたい", PERSONA, ["例のセリフ"], ["https://example.com/a.jpg"])
 
         kwargs = client.messages.parse.call_args.kwargs
         image, text = kwargs["messages"][0]["content"]

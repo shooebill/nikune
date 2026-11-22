@@ -542,7 +542,7 @@ class AutoQuoteRetweeter:
         food_photo_ids: Optional[set[Any]] = None,
         time_hints: Optional[Dict[Any, Tuple[Optional[str], Optional[str]]]] = None,
     ) -> Dict[Any, List[str]]:
-        """写真付きの候補の1枚目を見て、写真から分かったキーワードを返す（ツイートID → キーワード）
+        """写真付きの候補の写真（先頭から PHOTO_CHECK_MAX_PHOTOS 枚まで）を見て、写真から分かったキーワードを返す（ツイートID → キーワード）
 
         写真に肉が写っていれば PHOTO_MEAT_KEYWORD を、料理名・肉の種類が分かればそのキーワードを入れる。
         食べ物の写真でなかった候補・判定できなかった候補・写真のない候補はキーに含めない
@@ -564,7 +564,7 @@ class AutoQuoteRetweeter:
                 break
             attempts += 1
 
-            verdict = self.photo_checker.check(photo_urls[0], dish_keywords, tweet.text)
+            verdict = self.photo_checker.check(photo_urls, dish_keywords, tweet.text)
             if verdict is None:
                 results["photo_unavailable"] += 1
                 continue
@@ -616,6 +616,7 @@ class AutoQuoteRetweeter:
                 break
             attempts += 1
 
+            # Jev の画像入力は試験的な機能で、複数枚は確かめていないので1枚目だけを見せる
             photo_urls = getattr(tweet, "photo_urls", None) or []
             verdict = judge_meat_focus(
                 self.jev_checker, str(tweet.id), tweet.text, photo_urls[0] if photo_urls else None
@@ -664,10 +665,9 @@ class AutoQuoteRetweeter:
             )
 
         photo_urls = getattr(tweet, "photo_urls", None) or []
-        photo_url = photo_urls[0] if photo_urls else None
 
         if not food_photo and self.persona is not None:
-            return self._written_comment(tweet, photo_url, score_info, results)
+            return self._written_comment(tweet, photo_urls, score_info, results)
 
         comment = self.content_generator.generate_quote_comment(
             tweet.text, posted_at, from_photo, exclude_meat=exclude_meat, meal=meal, light=light
@@ -688,7 +688,7 @@ class AutoQuoteRetweeter:
                     light=light,
                 )
             results["comment_checks"] += 1
-            verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
+            verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_urls)
             if verdict is None:
                 results["comment_check_unavailable"] += 1
                 return None
@@ -700,7 +700,7 @@ class AutoQuoteRetweeter:
         return None
 
     def _written_comment(
-        self, tweet: Any, photo_url: Optional[str], score_info: Dict[str, Any], results: Dict[str, Any]
+        self, tweet: Any, photo_urls: List[str], score_info: Dict[str, Any], results: Dict[str, Any]
     ) -> Optional[str]:
         """料理の写真がない投稿に、投稿に合わせたセリフを書かせて返す。使えるものが書けなければ None
 
@@ -709,7 +709,7 @@ class AutoQuoteRetweeter:
         照合できなかったときは results["comment_check_unavailable"] を増やす（その回は引用しない）。
         """
         written = self.photo_checker.write_comment(
-            tweet.text, self.persona or [], self.content_generator.quote_comment_examples(), photo_url
+            tweet.text, self.persona or [], self.content_generator.quote_comment_examples(), photo_urls
         )
         if written is None:
             results["comment_check_unavailable"] += 1
@@ -726,7 +726,7 @@ class AutoQuoteRetweeter:
         logger.info(f"✍️ Written comment: tweet={tweet.id} model={written.model} text={comment}")
 
         results["comment_checks"] += 1
-        verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)
+        verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_urls)
         if verdict is None:
             results["comment_check_unavailable"] += 1
             return None
