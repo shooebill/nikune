@@ -62,6 +62,9 @@ def main() -> int:
         print(f"食べ物の写真: {verdict.is_food}")
         print(f"肉が写っている: {verdict.shows_meat}")
         print(f"料理: {verdict.dishes}")
+        print(f"肉の種類: {verdict.meats}")
+        print(f"食事の種類（本文）: {verdict.meal or '分からない'}")
+        print(f"写真の昼夜: {verdict.light or '分からない'}")
         print(f"モデル: {verdict.model}")
 
     if args.comment:

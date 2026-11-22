@@ -15,6 +15,7 @@ from config.settings import BOT_NAME, NG_KEYWORDS, TIME_SETTINGS
 
 from .database import DatabaseManager
 from .emoji_rules import SIGNATURE_EMOJI, extract_emojis, find_emoji_rule_violations
+from .photo_checker import LIGHT_DAY, LIGHT_NIGHT, MEAL_DINNER, MEAL_LUNCH, MEAL_MORNING
 from .twitter_client import _safe_text_length
 
 # ログ設定
@@ -143,6 +144,34 @@ class ContentGenerator:
 
     # 時間帯の一言をTSVで差し替えるときの bucket 名（_get_time_based_comment() を参照）
     TIME_PHRASE_BUCKETS = ("time_morning", "time_lunch", "time_dinner", "time_other")
+
+    # 本文の食事の言葉（写真を判定していない投稿で、何の食事の話かを決めるのに使う）。
+    # 2種類以上に当たる本文（「ランチもディナーも」など）は分からない扱いにする
+    MEAL_KEYWORDS: Dict[str, List[str]] = {
+        MEAL_MORNING: ["朝ごはん", "朝ご飯", "朝食", "朝飯", "朝めし", "モーニング", "朝ラー", "朝マック"],
+        MEAL_LUNCH: ["ランチ", "昼ごはん", "昼ご飯", "昼食", "昼飯", "昼めし", "お昼"],
+        MEAL_DINNER: [
+            "夕食",
+            "夕飯",
+            "夕ごはん",
+            "夕ご飯",
+            "晩ごはん",
+            "晩ご飯",
+            "晩飯",
+            "夜ごはん",
+            "夜ご飯",
+            "夜飯",
+            "ディナー",
+            "晩酌",
+        ],
+    }
+    # 食事の種類 → 時間帯の一言の bucket
+    _MEAL_BUCKETS = {MEAL_MORNING: "time_morning", MEAL_LUNCH: "time_lunch", MEAL_DINNER: "time_dinner"}
+    # 写真の明るさと矛盾しない bucket（昼の写真に夜の一言、夜の写真に朝・昼の一言を付けない）
+    _LIGHT_BUCKETS = {
+        LIGHT_DAY: ("time_morning", "time_lunch"),
+        LIGHT_NIGHT: ("time_dinner", "time_other"),
+    }
 
     # 時間帯判定用設定（config/settings.pyから読み込み）
     MORNING_START = TIME_SETTINGS["MORNING_START"]
@@ -918,6 +947,8 @@ class ContentGenerator:
         extra_keywords: Optional[List[str]] = None,
         use_dedicated: bool = True,
         exclude_meat: bool = False,
+        meal: Optional[str] = None,
+        light: Optional[str] = None,
     ) -> str:
         """食関連ツイート用のコメント生成（優先度対応版）
 
@@ -928,6 +959,9 @@ class ContentGenerator:
             use_dedicated: False にすると専用コメントを使わず、汎用の文言から選ぶ
                 （専用コメントが投稿の内容と食い違ったときの選び直し用）
             exclude_meat: True にすると肉のキーワードを数えずに選ぶ（get_food_keyword_score と同じ）
+            meal: 写真の判定（Claude）で分かった食事の種類。省略時は本文の言葉から決める（detect_meal）
+            light: 写真の判定で分かった昼か夜か。時間帯の一言はこの2つと投稿時刻が食い違えば付けない
+                （_time_bucket_for を参照）
         """
         try:
             # キーワードの優先度スコアを取得
@@ -952,7 +986,8 @@ class ContentGenerator:
             else:
                 # astimezone()で実行環境のローカル時刻（本番はJST）に直す
                 hour = posted_at.astimezone().hour if posted_at is not None else datetime.now().hour
-                time_comment = self._get_time_based_comment(hour, score_info["score"])
+                bucket = self._time_bucket_for(hour, meal or self.detect_meal(original_tweet_text), light)
+                time_comment = self._get_time_based_comment(bucket, score_info["score"]) if bucket else ""
 
             # 絵文字ルールを一元適用（🐻署名＋肉トピック時のみ🥩🍖）
             final_comment = self._decorate_comment(base_comment + time_comment, score_info["is_meat_topic"])
@@ -1051,22 +1086,58 @@ class ContentGenerator:
         """
         return bool(self._dedicated_quote_comments(matched_keywords))
 
-    def _get_time_based_comment(self, current_hour: int, priority_score: int) -> str:
-        """時間帯と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）
+    def detect_meal(self, text: str) -> Optional[str]:
+        """本文の言葉から、何の食事の話か（MEAL_MORNING / MEAL_LUNCH / MEAL_DINNER）を返す
+
+        どの言葉もない本文と、2種類以上の言葉がある本文は None（分からない）。
+        """
+        found = [meal for meal, words in self.MEAL_KEYWORDS.items() if any(word in text for word in words)]
+        return found[0] if len(found) == 1 else None
+
+    def _time_bucket(self, current_hour: int) -> str:
+        """時刻から時間帯の一言の bucket を返す"""
+        if self.MORNING_START <= current_hour < self.MORNING_END:
+            return "time_morning"
+        if self.LUNCH_START <= current_hour < self.LUNCH_END:
+            return "time_lunch"
+        if self.DINNER_START <= current_hour < self.DINNER_END:
+            return "time_dinner"
+        return "time_other"
+
+    def _time_bucket_for(self, current_hour: int, meal: Optional[str], light: Optional[str]) -> Optional[str]:
+        """時間帯の一言の bucket を決める。投稿の中身と時刻が食い違えば None（一言を付けない）
+
+        1. 本文から食事の種類が分かれば、それが投稿時刻の時間帯と同じときだけ付ける
+           （18時台に投稿されたランチの話に「夜ごはん」の一言を付けたことがあった）
+        2. 食事の種類が分からず写真の明るさが分かれば、投稿時刻の時間帯と矛盾しないときだけ付ける
+        3. どちらも分からなければ、投稿時刻で決める（従来どおり）
+        """
+        bucket = self._time_bucket(current_hour)
+        if meal in self._MEAL_BUCKETS:
+            matched = self._MEAL_BUCKETS[meal] == bucket
+        elif light in self._LIGHT_BUCKETS:
+            matched = bucket in self._LIGHT_BUCKETS[light]
+        else:
+            return bucket
+        if not matched:
+            logger.info(f"🕒 Time phrase skipped: meal={meal} light={light} posted={bucket}")
+            return None
+        return bucket
+
+    def _get_time_based_comment(self, bucket: str, priority_score: int) -> str:
+        """時間帯の bucket と優先度に基づいて追加コメントを生成（絵文字を含まない素のテキスト）
 
         quote_comments.tsv に時間帯の一言（bucket が time_morning など）があればその中から選び、
         なければここに書いてある文言を使う。
         """
         try:
-            if self.MORNING_START <= current_hour < self.MORNING_END:
-                bucket, base_time_comment = "time_morning", " 朝から幸せね〜"
-            elif self.LUNCH_START <= current_hour < self.LUNCH_END:
-                bucket, base_time_comment = "time_lunch", " お昼にちょうどいいわね！"
-            elif self.DINNER_START <= current_hour < self.DINNER_END:
-                bucket, base_time_comment = "time_dinner", " 夜ご飯が楽しみだ！"
-            else:
+            base_time_comment = {
+                "time_morning": " 朝から幸せね〜",
+                "time_lunch": " お昼にちょうどいいわね！",
+                "time_dinner": " 夜ご飯が楽しみだ！",
+            }.get(bucket, "")
+            if bucket == "time_other":
                 # 夜間や早朝の場合、優先度が高ければ特別コメント
-                bucket, base_time_comment = "time_other", ""
                 if priority_score >= 3:
                     base_time_comment = " 特別ね〜！"
                 elif priority_score >= 2:

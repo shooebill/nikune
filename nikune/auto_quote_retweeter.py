@@ -8,7 +8,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import (
     BOT_NAME,
@@ -276,7 +276,8 @@ class AutoQuoteRetweeter:
 
             # 写真付きの候補は写真も見る（本文が店名や日付だけでも、何の料理か・肉が写っているかが分かる）
             food_photo_ids: set[Any] = set()
-            photo_keywords = self._check_photos(candidates, search_tweet_ids, results, food_photo_ids)
+            time_hints: Dict[Any, Tuple[Optional[str], Optional[str]]] = {}
+            photo_keywords = self._check_photos(candidates, search_tweet_ids, results, food_photo_ids, time_hints)
 
             # 肉の話題を先に見る（以前は新しい順に見て最初の食の投稿を引用していたため、
             # 肉の投稿が後ろにあっても届かず、引用の大半が肉以外になっていた）
@@ -370,6 +371,7 @@ class AutoQuoteRetweeter:
                             results,
                             exclude_meat,
                             food_photo=tweet.id in food_photo_ids,
+                            time_hint=time_hints.get(tweet.id, (None, None)),
                         )
                         if results["comment_check_unavailable"] > 0:
                             # 確かめられないセリフは投稿しない。障害はほかの候補でも同じなので、この回はここで終える。
@@ -538,13 +540,15 @@ class AutoQuoteRetweeter:
         search_tweet_ids: set[Any],
         results: Dict[str, Any],
         food_photo_ids: Optional[set[Any]] = None,
+        time_hints: Optional[Dict[Any, Tuple[Optional[str], Optional[str]]]] = None,
     ) -> Dict[Any, List[str]]:
         """写真付きの候補の1枚目を見て、写真から分かったキーワードを返す（ツイートID → キーワード）
 
-        写真に肉が写っていれば PHOTO_MEAT_KEYWORD を、料理名が分かればそのキーワードを入れる。
+        写真に肉が写っていれば PHOTO_MEAT_KEYWORD を、料理名・肉の種類が分かればそのキーワードを入れる。
         食べ物の写真でなかった候補・判定できなかった候補・写真のない候補はキーに含めない
         （本文だけのルールで扱う）。見るのは1回の実行で PHOTO_CHECK_MAX_PER_RUN 件まで。
         food_photo_ids を渡すと、料理の写真と判定した候補のIDを入れる（セリフの選び方を分けるのに使う）。
+        time_hints を渡すと、判定できた候補の（食事の種類, 写真の昼夜）を入れる（時間帯の一言に使う）。
         """
         photo_keywords: Dict[Any, List[str]] = {}
         if not self.photo_checker.enabled:
@@ -568,13 +572,20 @@ class AutoQuoteRetweeter:
             results["photo_checked"] += 1
             if verdict.is_food and food_photo_ids is not None:
                 food_photo_ids.add(tweet.id)
+            if time_hints is not None:
+                time_hints[tweet.id] = (verdict.meal, verdict.light)
             keywords = list(verdict.dishes)
+            if verdict.is_food:
+                # 何の肉かは料理名と同じ扱い（肉のキーワードにある表記だけ。「羊肉」「その他の肉」は足さない）
+                meat_keywords = set(self.content_generator.MEAT_KEYWORDS)
+                keywords += [kind for kind in verdict.meats if kind in meat_keywords and kind not in keywords]
             if verdict.shows_meat:
                 keywords.append(self.content_generator.PHOTO_MEAT_KEYWORD)
             source = "search" if tweet.id in search_tweet_ids else "timeline"
             logger.info(
                 f"📷 Photo check: tweet={tweet.id} source={source} food={verdict.is_food} "
-                f"meat={verdict.shows_meat} dishes={verdict.dishes} model={verdict.model}"
+                f"meat={verdict.shows_meat} meats={verdict.meats} dishes={verdict.dishes} "
+                f"meal={verdict.meal} light={verdict.light} model={verdict.model}"
             )
             if keywords:
                 photo_keywords[tweet.id] = keywords
@@ -630,6 +641,7 @@ class AutoQuoteRetweeter:
         results: Dict[str, Any],
         exclude_meat: bool = False,
         food_photo: bool = True,
+        time_hint: Tuple[Optional[str], Optional[str]] = (None, None),
     ) -> Optional[str]:
         """投稿の内容と食い違わないセリフを返す。合うものがなければ None
 
@@ -643,10 +655,12 @@ class AutoQuoteRetweeter:
         食い違っていたら汎用の文言で選び直す。汎用の文言は肉のセリフなので、肉の話題でなければ選び直さない。
         キーが未設定の環境では照合せず、選んだセリフをそのまま使う。キーがあるのに判定できなかったとき
         （API失敗・クレジット切れ）は results["comment_check_unavailable"] を増やして None を返す。
+        time_hint は写真の判定で分かった（食事の種類, 写真の昼夜）で、時間帯の一言を付けるかどうかに使う。
         """
+        meal, light = time_hint
         if not self.photo_checker.enabled:
             return self.content_generator.generate_quote_comment(
-                tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
+                tweet.text, posted_at, from_photo, exclude_meat=exclude_meat, meal=meal, light=light
             )
 
         photo_urls = getattr(tweet, "photo_urls", None) or []
@@ -656,7 +670,7 @@ class AutoQuoteRetweeter:
             return self._written_comment(tweet, photo_url, score_info, results)
 
         comment = self.content_generator.generate_quote_comment(
-            tweet.text, posted_at, from_photo, exclude_meat=exclude_meat
+            tweet.text, posted_at, from_photo, exclude_meat=exclude_meat, meal=meal, light=light
         )
 
         # 1本目は選ばれたセリフ、2本目は専用コメントを使わない汎用の文言
@@ -665,7 +679,13 @@ class AutoQuoteRetweeter:
                 if not score_info["is_meat_topic"]:
                     return None
                 comment = self.content_generator.generate_quote_comment(
-                    tweet.text, posted_at, from_photo, use_dedicated=False, exclude_meat=exclude_meat
+                    tweet.text,
+                    posted_at,
+                    from_photo,
+                    use_dedicated=False,
+                    exclude_meat=exclude_meat,
+                    meal=meal,
+                    light=light,
                 )
             results["comment_checks"] += 1
             verdict = self.photo_checker.comment_fits(comment, tweet.text, photo_url)

@@ -3,6 +3,7 @@ from typing import Any, Dict
 from unittest import TestCase, mock
 
 from nikune.auto_quote_retweeter import AutoQuoteRetweeter
+from nikune.content_generator import ContentGenerator
 from nikune.jev_checker import JevChecker
 from nikune.meat_focus import MEAT_MAIN_KEY, MeatFocusVerdict
 from nikune.photo_checker import CommentVerdict, PhotoChecker, PhotoVerdict, WrittenComment
@@ -576,6 +577,26 @@ class PhotoCheckTests(TestCase):
         _, post, _ = self._run(verdicts, [_photo_tweet("cat", "かわいい")])
 
         post.assert_not_called()
+
+    def test_meal_and_light_from_the_photo_check_reach_the_comment(self) -> None:
+        verdicts = {"lunch": PhotoVerdict(is_food=True, shows_meat=True, dishes=[], meal="lunch", light="day")}
+
+        with mock.patch.object(ContentGenerator, "generate_quote_comment", return_value="🐻 肉ね！") as generate:
+            self._run(verdicts, [_photo_tweet("lunch", "三軒茶屋のお店。")])
+
+        self.assertEqual(generate.call_args.kwargs["meal"], "lunch")
+        self.assertEqual(generate.call_args.kwargs["light"], "day")
+
+    def test_meat_kind_from_the_photo_is_used_as_a_keyword(self) -> None:
+        verdicts = {"shop": PhotoVerdict(is_food=True, shows_meat=True, dishes=[], meats=["豚肉", "羊肉"])}
+
+        with mock.patch.object(ContentGenerator, "generate_quote_comment", return_value="🐻 肉ね！") as generate:
+            self._run(verdicts, [_photo_tweet("shop", "三軒茶屋のお店。")])
+
+        from_photo = generate.call_args.args[2]
+        self.assertIn("豚肉", from_photo)
+        # 肉のキーワードにない表記は足さない
+        self.assertNotIn("羊肉", from_photo)
 
     def test_failed_photo_check_falls_back_to_text_rules(self) -> None:
         results, post, _ = self._run({}, [_photo_tweet("meat", "焼肉たべた")])
