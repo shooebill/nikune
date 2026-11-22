@@ -280,10 +280,79 @@ class QuoteCommentTimePhraseTests(TestCase):
         jst = timezone(timedelta(hours=9))
         posted_at = datetime(2026, 9, 29, 23, 32, tzinfo=jst)
 
-        with mock.patch.object(self.generator, "_get_time_based_comment", return_value="") as time_phrase:
+        with mock.patch.object(self.generator, "_time_bucket", return_value="time_other") as bucket:
             self.generator.generate_quote_comment("ラーメン食べた", posted_at)
 
-        self.assertEqual(time_phrase.call_args.args[0], posted_at.astimezone().hour)
+        self.assertEqual(bucket.call_args.args[0], posted_at.astimezone().hour)
+
+
+class QuoteTimePhraseMealAndLightTests(TestCase):
+    """時間帯の一言は、本文の食事の種類・写真の昼夜と投稿時刻が食い違えば付けないことの確認
+    （18時台に投稿されたランチの話に「夜ごはん」の一言を付けたための対応）"""
+
+    def setUp(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        self.generator = _make_generator()
+        self.generator._medium_priority_comments = ["汎用のセリフ！"]
+        self.generator._time_phrases = {
+            "time_morning": ["朝の一言"],
+            "time_lunch": ["お昼の一言"],
+            "time_dinner": ["夜の一言"],
+            "time_other": ["深夜の一言"],
+        }
+        jst = timezone(timedelta(hours=9))
+        self.noon = datetime(2026, 11, 19, 12, 0, tzinfo=jst).astimezone()
+        self.evening = datetime(2026, 11, 19, 18, 8, tzinfo=jst).astimezone()
+        self.late_night = datetime(2026, 11, 19, 23, 0, tzinfo=jst).astimezone()
+
+    def test_lunch_post_in_the_evening_gets_no_time_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("新店のやばいランチ見つけた。カレー最高", self.evening)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！")
+
+    def test_lunch_post_at_noon_gets_the_lunch_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("今日のランチはカレー", self.noon)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ お昼の一言")
+
+    def test_meal_from_the_photo_check_wins_over_the_text(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.evening, meal="lunch")
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！")
+
+    def test_dark_photo_blocks_a_lunch_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.noon, light="night")
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！")
+
+    def test_dark_photo_late_at_night_keeps_the_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.late_night, light="night")
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ 深夜の一言")
+
+    def test_bright_photo_blocks_a_dinner_phrase(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.evening, light="day")
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！")
+
+    def test_meal_is_checked_before_light(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.evening, meal="dinner", light="day")
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ 夜の一言")
+
+    def test_unknown_meal_and_light_fall_back_to_the_post_time(self) -> None:
+        comment = self.generator.generate_quote_comment("カレーたべた", self.evening)
+
+        self.assertEqual(comment, "🐻 汎用のセリフ！ 夜の一言")
+
+    def test_detect_meal_from_text(self) -> None:
+        self.assertEqual(self.generator.detect_meal("モーニングのトースト"), "morning")
+        self.assertEqual(self.generator.detect_meal("今日のお昼はカレー"), "lunch")
+        self.assertEqual(self.generator.detect_meal("晩酌のおとも"), "dinner")
+        self.assertIsNone(self.generator.detect_meal("カレーたべた"))
+        # 2種類以上の言葉がある本文は分からない扱い
+        self.assertIsNone(self.generator.detect_meal("ランチもディナーもやってる店"))
 
 
 class QuoteTimePhraseAttachmentTests(TestCase):

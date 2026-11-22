@@ -11,6 +11,19 @@ def _response(answer: Any, stop_reason: str = "end_turn") -> SimpleNamespace:
     return SimpleNamespace(parsed_output=answer, stop_reason=stop_reason, model="test-model")
 
 
+def _photo_answer(**overrides: Any) -> _PhotoAnswer:
+    fields: dict[str, Any] = {
+        "is_food": True,
+        "shows_meat": False,
+        "dishes": [],
+        "meats": [],
+        "meal": "unknown",
+        "light": "unknown",
+    }
+    fields.update(overrides)
+    return _PhotoAnswer(**fields)
+
+
 def _checker(client: Any) -> PhotoChecker:
     return PhotoChecker(api_key=None, model="test-model", timeout_seconds=1, client=client)
 
@@ -25,7 +38,7 @@ class PhotoCheckerTests(TestCase):
     def test_answer_is_returned_and_unknown_dishes_are_dropped(self) -> None:
         client = mock.MagicMock()
         client.messages.parse.return_value = _response(
-            _PhotoAnswer(is_food=True, shows_meat=True, dishes=["焼肉", "一覧にない料理"])
+            _photo_answer(is_food=True, shows_meat=True, dishes=["焼肉", "一覧にない料理"])
         )
 
         verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
@@ -38,7 +51,7 @@ class PhotoCheckerTests(TestCase):
 
     def test_the_photo_is_sent_by_url_with_the_dish_list_and_the_post_text(self) -> None:
         client = mock.MagicMock()
-        client.messages.parse.return_value = _response(_PhotoAnswer(is_food=False, shows_meat=False, dishes=[]))
+        client.messages.parse.return_value = _response(_photo_answer(is_food=False, shows_meat=False, dishes=[]))
 
         _checker(client).check("https://example.com/a.jpg", DISHES, "豚肉の串です")
 
@@ -51,13 +64,47 @@ class PhotoCheckerTests(TestCase):
 
     def test_non_food_photo_never_reports_meat_or_dishes(self) -> None:
         client = mock.MagicMock()
-        client.messages.parse.return_value = _response(_PhotoAnswer(is_food=False, shows_meat=True, dishes=["焼肉"]))
+        client.messages.parse.return_value = _response(_photo_answer(is_food=False, shows_meat=True, dishes=["焼肉"]))
 
         verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
 
         assert verdict is not None
         self.assertFalse(verdict.shows_meat)
         self.assertEqual(verdict.dishes, [])
+
+    def test_meat_kinds_meal_and_light_are_returned(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(
+            _photo_answer(shows_meat=True, meats=["鶏肉", "鶏肉"], meal="lunch", light="night")
+        )
+
+        verdict = _checker(client).check("https://example.com/a.jpg", DISHES, "新店のランチ")
+
+        assert verdict is not None
+        self.assertEqual(verdict.meats, ["鶏肉"])
+        self.assertEqual(verdict.meal, "lunch")
+        self.assertEqual(verdict.light, "night")
+
+    def test_unknown_meal_and_light_become_none(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_photo_answer())
+
+        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+
+        assert verdict is not None
+        self.assertEqual(verdict.meats, [])
+        self.assertIsNone(verdict.meal)
+        self.assertIsNone(verdict.light)
+
+    def test_breakfast_answer_is_returned_as_morning(self) -> None:
+        client = mock.MagicMock()
+        client.messages.parse.return_value = _response(_photo_answer(meal="breakfast", light="day"))
+
+        verdict = _checker(client).check("https://example.com/a.jpg", DISHES)
+
+        assert verdict is not None
+        self.assertEqual(verdict.meal, "morning")
+        self.assertEqual(verdict.light, "day")
 
     def test_api_failure_returns_none_without_raising(self) -> None:
         client = mock.MagicMock()
@@ -111,7 +158,7 @@ class CommentFitsTests(TestCase):
         self.assertEqual([part["type"] for part in content], ["text"])
 
     def test_failure_or_wrong_answer_shape_returns_none(self) -> None:
-        wrong_shape = _response(_PhotoAnswer(is_food=True, shows_meat=True, dishes=[]))
+        wrong_shape = _response(_photo_answer(is_food=True, shows_meat=True, dishes=[]))
         for outcome in [RuntimeError("boom"), wrong_shape, _response(None, stop_reason="refusal")]:
             with self.subTest(outcome=type(outcome).__name__):
                 client = mock.MagicMock()

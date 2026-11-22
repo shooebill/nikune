@@ -2,8 +2,10 @@
 引用RT候補の写真と本文を Claude に見せて、料理・肉が写っているかを判定するモジュール
 
 本文のキーワード一致だけでは、「店名や日付だけの本文＋料理の写真」という投稿の中身が分からない。
-写真1枚と本文を見て「食べ物の写真か」「肉が写っているか」「何の料理か」だけを答えてもらい、
-引用する候補の順位付けとセリフ選びに使う。写真だけでは見分けられないもの（串焼きの肉の種類など）が
+写真1枚と本文を見て「食べ物の写真か」「肉が写っているか」「何の料理か」「何の肉か」を答えてもらい、
+引用する候補の順位付けとセリフ選びに使う。同じ問い合わせで「朝ごはん・ランチ・夕食のどれの話か」（本文から）と
+「写真が昼か夜か」（屋外の明るさが分かるときだけ）も答えてもらい、時間帯の一言を付けるかどうかに使う
+（投稿の時刻だけで決めていたときは、18時台に投稿されたランチの話に「夜ごはん」の一言を付けた）。写真だけでは見分けられないもの（串焼きの肉の種類など）が
 あるので、本文も一緒に渡す。
 
 選んだセリフが投稿の内容と食い違っていないかも、投稿の前に確かめる（comment_fits）。
@@ -23,8 +25,8 @@
 
 import logging
 import threading
-from dataclasses import dataclass
-from typing import Any, List, Mapping, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Any, List, Literal, Mapping, Optional, Sequence
 
 import anthropic
 from pydantic import BaseModel
@@ -43,7 +45,20 @@ MAX_POST_TEXT_LENGTH = 1000
 # セリフの照合で残す理由の最大文字数
 MAX_REASON_LENGTH = 60
 
-_PROMPT = """SNSの投稿1件の、添付写真と本文です。写真と本文を合わせて読み、次の3点を判定してください。
+# 何の肉かの選択肢。「羊肉」「その他の肉」以外は肉のキーワード（MEAT_KEYWORDS）と同じ表記
+MEAT_KINDS = ("牛肉", "豚肉", "鶏肉", "羊肉", "その他の肉")
+
+# meal / light の値（答えの "unknown" は None にする）
+MEAL_MORNING = "morning"
+MEAL_LUNCH = "lunch"
+MEAL_DINNER = "dinner"
+LIGHT_DAY = "day"
+LIGHT_NIGHT = "night"
+
+_MEAL_FROM_ANSWER = {"breakfast": MEAL_MORNING, "lunch": MEAL_LUNCH, "dinner": MEAL_DINNER}
+_LIGHT_FROM_ANSWER = {"day": LIGHT_DAY, "night": LIGHT_NIGHT}
+
+_PROMPT = """SNSの投稿1件の、添付写真と本文です。写真と本文を合わせて読み、次の6点を判定してください。
 
 - is_food: 料理・食べ物が主役の写真かどうか（店の外観、メニュー表、人物、風景などは false）
 - shows_meat: 肉（牛・豚・鶏・羊などの肉、肉料理、ハムやベーコンなどの加工肉）がはっきり写っているかどうか。
@@ -52,6 +67,13 @@ _PROMPT = """SNSの投稿1件の、添付写真と本文です。写真と本文
   写真だけでは見分けがつかないもの（串焼きの肉の種類など）は本文で確かめ、食い違うときは本文に合わせる。
   本文が「〜ではない」と述べている料理や、名前や見た目が似ているだけの料理は選ばない。
   当てはまるものがなければ空にする。はっきり分からないものは選ばない
+- meats: 写っている肉、または本文から分かる肉の種類を、牛肉・豚肉・鶏肉・羊肉・その他の肉 から選ぶ（複数可）。
+  写真でも本文でも見分けられなければ空にする。推測では選ばない
+- meal: 本文が朝ごはん（breakfast）・昼ごはん（lunch）・夕食（dinner）のどれの話か。
+  「ランチ」「モーニング」「晩酌」など本文にはっきり書いてあるときだけ選び、書いていなければ unknown。
+  写真の料理や投稿の時刻からは推測しない
+- light: 写真が昼（day）か夜（night）か。窓の外・屋外の空や景色など、外の明るさが写っているときだけ選ぶ。
+  店内や室内の照明だけで撮った写真は、明るく見えても unknown
 
 一覧: {dishes}
 
@@ -126,6 +148,9 @@ class _PhotoAnswer(BaseModel):
     is_food: bool
     shows_meat: bool
     dishes: List[str]
+    meats: List[Literal["牛肉", "豚肉", "鶏肉", "羊肉", "その他の肉"]]
+    meal: Literal["breakfast", "lunch", "dinner", "unknown"]
+    light: Literal["day", "night", "unknown"]
 
 
 class _WrittenAnswer(BaseModel):
@@ -176,12 +201,18 @@ class PhotoVerdict:
         shows_meat: 肉がはっきり写っているか
         dishes: 写っている料理（問い合わせ時に渡した一覧に含まれるものだけ）
         model: 実際に応答したモデル
+        meats: 何の肉か（MEAT_KINDS のどれか。分からなければ空）
+        meal: 本文が何の食事の話か（MEAL_MORNING / MEAL_LUNCH / MEAL_DINNER、分からなければ None）
+        light: 写真が昼か夜か（LIGHT_DAY / LIGHT_NIGHT、外の明るさが写っていなければ None）
     """
 
     is_food: bool
     shows_meat: bool
     dishes: List[str]
     model: Optional[str] = None
+    meats: List[str] = field(default_factory=list)
+    meal: Optional[str] = None
+    light: Optional[str] = None
 
 
 class PhotoChecker:
@@ -242,6 +273,10 @@ class PhotoChecker:
             shows_meat=answer.is_food and answer.shows_meat,
             dishes=[dish for dish in answer.dishes if dish in allowed] if answer.is_food else [],
             model=getattr(response, "model", None),
+            # 料理の写真でなくても、本文から分かる肉の種類と食事の種類は使う
+            meats=list(dict.fromkeys(answer.meats)),
+            meal=_MEAL_FROM_ANSWER.get(answer.meal),
+            light=_LIGHT_FROM_ANSWER.get(answer.light),
         )
 
     def comment_fits(self, comment: str, post_text: str, image_url: Optional[str] = None) -> Optional[CommentVerdict]:
