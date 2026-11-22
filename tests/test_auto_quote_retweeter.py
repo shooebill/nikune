@@ -538,8 +538,8 @@ class PhotoCheckTests(TestCase):
     ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
         photo_checker = mock.MagicMock(spec=PhotoChecker)
         photo_checker.enabled = True
-        photo_checker.check.side_effect = lambda url, dishes, text: verdicts.get(
-            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        photo_checker.check.side_effect = lambda urls, dishes, text: verdicts.get(
+            urls[0].rsplit("/", 1)[-1].removesuffix(".jpg")
         )
         photo_checker.comment_fits.return_value = CommentVerdict(fits=True, reason="ok")
         retweeter = AutoQuoteRetweeter(db_manager=_make_db_mock(), dry_run=True, photo_checker=photo_checker)
@@ -604,6 +604,14 @@ class PhotoCheckTests(TestCase):
         self.assertEqual(results["photo_unavailable"], 1)
         self.assertEqual(post.call_args.args[0], "meat")
 
+    def test_all_photos_of_a_tweet_are_sent_to_the_photo_check(self) -> None:
+        tweet = _photo_tweet("shop", "三軒茶屋のお店。")
+        tweet.photo_urls = ["https://example.com/shop.jpg", "https://example.com/dish.jpg"]
+
+        _, _, photo_checker = self._run({}, [tweet])
+
+        self.assertEqual(photo_checker.check.call_args.args[0], tweet.photo_urls)
+
     def test_photo_checks_are_capped_per_run(self) -> None:
         timeline = [_photo_tweet(f"t{i}", "かわいい") for i in range(4)]
 
@@ -662,10 +670,10 @@ class CommentCheckTests(TestCase):
 
         self.assertIn(self.DEDICATED, post.call_args.args[2])
         self.assertEqual(results["comment_checks"], 1)
-        comment, text, photo_url = photo_checker.comment_fits.call_args.args
+        comment, text, photo_urls = photo_checker.comment_fits.call_args.args
         self.assertIn(self.DEDICATED, comment)
         self.assertEqual(text, "焼き鳥たべた")
-        self.assertEqual(photo_url, "https://example.com/t1.jpg")
+        self.assertEqual(photo_urls, ["https://example.com/t1.jpg"])
 
     def test_mismatched_dedicated_comment_is_replaced_with_a_generic_one(self) -> None:
         results, post, _ = self._run([False, True], [_food_tweet("t1", "豚肉なのに焼き鳥と呼ぶ")])
@@ -741,8 +749,8 @@ class WrittenCommentTests(TestCase):
     ) -> tuple[Dict[str, Any], mock.MagicMock, mock.MagicMock]:
         photo_checker = mock.MagicMock(spec=PhotoChecker)
         photo_checker.enabled = True
-        photo_checker.check.side_effect = lambda url, dishes, text: (photo_verdicts or {}).get(
-            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        photo_checker.check.side_effect = lambda urls, dishes, text: (photo_verdicts or {}).get(
+            urls[0].rsplit("/", 1)[-1].removesuffix(".jpg")
         )
         photo_checker.write_comment.side_effect = [
             None if text is None else WrittenComment(text=text, model="writer") for text in (written or [self.WRITTEN])
@@ -768,11 +776,11 @@ class WrittenCommentTests(TestCase):
         results, post, photo_checker = self._run([_food_tweet("t1", "寿司を食べに行く予定")])
 
         self.assertEqual(post.call_args.args[2], f"🐻 {self.WRITTEN}")
-        text, persona, examples, photo_url = photo_checker.write_comment.call_args.args
+        text, persona, examples, photo_urls = photo_checker.write_comment.call_args.args
         self.assertEqual(text, "寿司を食べに行く予定")
         self.assertEqual(persona, [{"content": "テスト用のペルソナ"}])
         self.assertIn(self.DEDICATED, examples)
-        self.assertIsNone(photo_url)
+        self.assertEqual(photo_urls, [])
         self.assertEqual(photo_checker.comment_fits.call_args.args[0], f"🐻 {self.WRITTEN}")
         self.assertEqual(results["written_comments"], 1)
 
@@ -796,7 +804,7 @@ class WrittenCommentTests(TestCase):
         _, post, photo_checker = self._run([_photo_tweet("gate", "今年最後の福岡。寿司3軒を訪問予定")], verdicts)
 
         self.assertEqual(post.call_args.args[2], f"🐻 {self.WRITTEN}")
-        self.assertEqual(photo_checker.write_comment.call_args.args[3], "https://example.com/gate.jpg")
+        self.assertEqual(photo_checker.write_comment.call_args.args[3], ["https://example.com/gate.jpg"])
 
     def test_without_persona_the_template_is_used(self) -> None:
         _, post, photo_checker = self._run([_food_tweet("t1", "寿司たべた")], has_persona=False)
@@ -862,8 +870,8 @@ class _MeatFocusRunner:
         client.system_one.return_value = _jev_response(SAFE_NOULS)
         photo_checker = mock.MagicMock(spec=PhotoChecker)
         photo_checker.enabled = True
-        photo_checker.check.side_effect = lambda url, dishes, text: (photo_verdicts or {}).get(
-            url.rsplit("/", 1)[-1].removesuffix(".jpg")
+        photo_checker.check.side_effect = lambda urls, dishes, text: (photo_verdicts or {}).get(
+            urls[0].rsplit("/", 1)[-1].removesuffix(".jpg")
         )
         photo_checker.comment_fits.return_value = CommentVerdict(fits=True, reason="ok")
         retweeter = AutoQuoteRetweeter(
@@ -905,6 +913,16 @@ class MeatFocusTests(_MeatFocusRunner, TestCase):
         self.assertEqual(results["meat_focus_checked"], 2)
         self.assertEqual(results["not_meat_main"], 1)
         # 写真付きの候補には写真のURLを渡す
+        self.assertEqual(judge.call_args_list[0].args[3], "https://example.com/noodles.jpg")
+
+    def test_meat_focus_gets_only_the_first_photo(self) -> None:
+        photo_verdicts = {"noodles": PhotoVerdict(is_food=True, shows_meat=True, dishes=["牛肉"])}
+        tweet = _photo_tweet("noodles", "そうめんに牛肉と焼肉のタレ")
+        tweet.photo_urls = ["https://example.com/noodles.jpg", "https://example.com/second.jpg"]
+
+        _, _, judge = self._run({"noodles": 0.95}, [tweet], photo_verdicts)
+
+        # Jev の画像入力は試験的な機能なので、複数枚は渡さない
         self.assertEqual(judge.call_args_list[0].args[3], "https://example.com/noodles.jpg")
 
     def test_side_meat_post_without_a_dedicated_comment_is_not_quoted(self) -> None:

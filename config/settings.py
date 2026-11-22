@@ -60,8 +60,11 @@ MEAT_FOCUS_CHECK_MAX_PER_RUN = int(os.getenv("MEAT_FOCUS_CHECK_MAX_PER_RUN", "10
 ANTHROPIC_API_KEY = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
 PHOTO_CHECK_MODEL = (os.getenv("PHOTO_CHECK_MODEL") or "").strip() or "claude-opus-5-5"
 PHOTO_CHECK_TIMEOUT_SECONDS = float(os.getenv("PHOTO_CHECK_TIMEOUT_SECONDS", "30"))
-# 1回の実行で写真を見る候補の上限（費用の上限。1候補につき見る写真は1枚目だけ）
+# 1回の実行で写真を見る候補の上限（費用の上限）
 PHOTO_CHECK_MAX_PER_RUN = int(os.getenv("PHOTO_CHECK_MAX_PER_RUN", "5"))
+# 1候補につき Claude に見せる写真の枚数（投稿の順に先頭から。Xの写真は1投稿4枚まで）。
+# 写真の判定・セリフの照合・セリフを書かせるときに使う。Jev の「肉が主役か」は1枚目だけ
+PHOTO_CHECK_MAX_PHOTOS = max(1, int(os.getenv("PHOTO_CHECK_MAX_PHOTOS", "4")))
 # セリフが投稿の内容と食い違っていないかを確かめる回数の上限（1回の実行あたり。超えたらその回は引用しない）
 COMMENT_CHECK_MAX_PER_RUN = int(os.getenv("COMMENT_CHECK_MAX_PER_RUN", "6"))
 # 料理の写真がない投稿に、投稿に合わせたセリフを書かせるモデル（書いたセリフは照合・NGワード・

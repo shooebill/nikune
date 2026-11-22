@@ -2,7 +2,7 @@
 引用RT候補の写真と本文を Claude に見せて、料理・肉が写っているかを判定するモジュール
 
 本文のキーワード一致だけでは、「店名や日付だけの本文＋料理の写真」という投稿の中身が分からない。
-写真1枚と本文を見て「食べ物の写真か」「肉が写っているか」「何の料理か」「何の肉か」を答えてもらい、
+写真（投稿の順に最大 PHOTO_CHECK_MAX_PHOTOS 枚）と本文を見て「食べ物の写真か」「肉が写っているか」「何の料理か」「何の肉か」を答えてもらい、
 引用する候補の順位付けとセリフ選びに使う。同じ問い合わせで「朝ごはん・ランチ・夕食のどれの話か」（本文から）と
 「写真が昼か夜か」（屋外の明るさが分かるときだけ）も答えてもらい、時間帯の一言を付けるかどうかに使う
 （投稿の時刻だけで決めていたときは、18時台に投稿されたランチの話に「夜ごはん」の一言を付けた）。写真だけでは見分けられないもの（串焼きの肉の種類など）が
@@ -58,10 +58,11 @@ LIGHT_NIGHT = "night"
 _MEAL_FROM_ANSWER = {"breakfast": MEAL_MORNING, "lunch": MEAL_LUNCH, "dinner": MEAL_DINNER}
 _LIGHT_FROM_ANSWER = {"day": LIGHT_DAY, "night": LIGHT_NIGHT}
 
-_PROMPT = """SNSの投稿1件の、添付写真と本文です。写真と本文を合わせて読み、次の6点を判定してください。
+_PROMPT = """SNSの投稿1件の、添付写真（投稿の順に1枚以上）と本文です。写真と本文を合わせて読み、次の6点を判定してください。
+写真が複数あるときは、すべての写真を見て答えてください。
 
-- is_food: 料理・食べ物が主役の写真かどうか（店の外観、メニュー表、人物、風景などは false）
-- shows_meat: 肉（牛・豚・鶏・羊などの肉、肉料理、ハムやベーコンなどの加工肉）がはっきり写っているかどうか。
+- is_food: 料理・食べ物が主役の写真が1枚でもあるかどうか（店の外観、メニュー表、人物、風景だけなら false）
+- shows_meat: 肉（牛・豚・鶏・羊などの肉、肉料理、ハムやベーコンなどの加工肉）がどれかの写真にはっきり写っているかどうか。
   魚介類・卵・豆腐は肉に含めない。肉が入っていそうでも見えていなければ false
 - dishes: この投稿の主役になっている料理に当てはまるものを、下の一覧からそのままの表記で選ぶ。
   写真だけでは見分けがつかないもの（串焼きの肉の種類など）は本文で確かめ、食い違うときは本文に合わせる。
@@ -72,8 +73,8 @@ _PROMPT = """SNSの投稿1件の、添付写真と本文です。写真と本文
 - meal: 本文が朝ごはん（breakfast）・昼ごはん（lunch）・夕食（dinner）のどれの話か。
   「ランチ」「モーニング」「晩酌」など本文にはっきり書いてあるときだけ選び、書いていなければ unknown。
   写真の料理や投稿の時刻からは推測しない
-- light: 写真が昼（day）か夜（night）か。窓の外・屋外の空や景色など、外の明るさが写っているときだけ選ぶ。
-  店内や室内の照明だけで撮った写真は、明るく見えても unknown
+- light: 写真が昼（day）か夜（night）か。どれかの写真に窓の外・屋外の空や景色など、外の明るさが写っているときだけ選ぶ。
+  店内や室内の照明だけで撮った写真は、明るく見えても unknown。写真によって昼と夜が食い違うときも unknown
 
 一覧: {dishes}
 
@@ -225,13 +226,16 @@ class PhotoChecker:
         timeout_seconds: float,
         client: Optional[Any] = None,
         writer_model: Optional[str] = None,
+        max_photos: int = 4,
     ) -> None:
         """
         Args:
             client: テスト用の差し替え口。省略時は api_key から Anthropic クライアントを作る
             writer_model: セリフを書かせるモデル。省略時は model と同じ
+            max_photos: 1回の問い合わせで見せる写真の枚数の上限
         """
         self.model = model
+        self.max_photos = max(1, max_photos)
         self.writer_model = writer_model or model
         self._client: Optional[Any] = client
         if client is None and api_key:
@@ -247,22 +251,25 @@ class PhotoChecker:
             model=settings.PHOTO_CHECK_MODEL,
             timeout_seconds=settings.PHOTO_CHECK_TIMEOUT_SECONDS,
             writer_model=settings.QUOTE_COMMENT_MODEL,
+            max_photos=settings.PHOTO_CHECK_MAX_PHOTOS,
         )
 
     @property
     def enabled(self) -> bool:
         return self._client is not None
 
-    def check(self, image_url: str, dish_keywords: Sequence[str], post_text: str = "") -> Optional[PhotoVerdict]:
+    def check(
+        self, image_urls: Sequence[str], dish_keywords: Sequence[str], post_text: str = ""
+    ) -> Optional[PhotoVerdict]:
         """写真と本文を判定する。判定できなかったとき（機能オフ・失敗・拒否）は None を返す
 
         Args:
-            image_url: 写真の公開URL
+            image_urls: 写真の公開URL（投稿の順。先頭から max_photos 枚まで見せる）
             dish_keywords: 料理名の一覧。dishes はこの中からだけ返る
             post_text: 投稿の本文。写真だけでは見分けられない料理を確かめるのに使う
         """
         prompt = _PROMPT.format(dishes="、".join(dish_keywords), post_text=post_text[:MAX_POST_TEXT_LENGTH])
-        response = self._ask(prompt, image_url, _PhotoAnswer, "Photo check")
+        response = self._ask(prompt, image_urls, _PhotoAnswer, "Photo check")
         if response is None:
             return None
         answer: _PhotoAnswer = response.parsed_output
@@ -279,16 +286,16 @@ class PhotoChecker:
             light=_LIGHT_FROM_ANSWER.get(answer.light),
         )
 
-    def comment_fits(self, comment: str, post_text: str, image_url: Optional[str] = None) -> Optional[CommentVerdict]:
+    def comment_fits(self, comment: str, post_text: str, image_urls: Sequence[str] = ()) -> Optional[CommentVerdict]:
         """セリフが投稿の内容と食い違っていないかを判定する。判定できなかったときは None を返す
 
         Args:
             comment: 付けようとしているセリフ
             post_text: 投稿の本文
-            image_url: 写真の公開URL（写真のない投稿では省略）
+            image_urls: 写真の公開URL（投稿の順。写真のない投稿では空）
         """
         prompt = _COMMENT_PROMPT.format(post_text=post_text[:MAX_POST_TEXT_LENGTH], comment=comment)
-        response = self._ask(prompt, image_url, _CommentAnswer, "Comment check")
+        response = self._ask(prompt, image_urls, _CommentAnswer, "Comment check")
         if response is None:
             return None
         answer: _CommentAnswer = response.parsed_output
@@ -299,7 +306,7 @@ class PhotoChecker:
         post_text: str,
         persona: Sequence[Mapping[str, str]],
         examples: Sequence[str],
-        image_url: Optional[str] = None,
+        image_urls: Sequence[str] = (),
     ) -> Optional[WrittenComment]:
         """投稿に合わせたセリフを1本書かせる。書けなかったとき（機能オフ・失敗・拒否）は None を返す
 
@@ -307,7 +314,7 @@ class PhotoChecker:
             post_text: 投稿の本文
             persona: 本番ペルソナの行（post_safety.load_persona の戻り値）
             examples: 口調の手本にするセリフ（絵文字なし）
-            image_url: 写真の公開URL（写真のない投稿では省略）
+            image_urls: 写真の公開URL（投稿の順。写真のない投稿では空）
         """
         prompt = _WRITE_PROMPT.format(
             persona=_format_persona(persona),
@@ -315,7 +322,7 @@ class PhotoChecker:
             post_text=post_text[:MAX_POST_TEXT_LENGTH],
         )
         response = self._ask(
-            prompt, image_url, _WrittenAnswer, "Comment writing", model=self.writer_model, effort="medium"
+            prompt, image_urls, _WrittenAnswer, "Comment writing", model=self.writer_model, effort="medium"
         )
         if response is None:
             return None
@@ -325,7 +332,7 @@ class PhotoChecker:
     def _ask(
         self,
         prompt: str,
-        image_url: Optional[str],
+        image_urls: Sequence[str],
         answer_type: type[BaseModel],
         label: str,
         model: Optional[str] = None,
@@ -336,9 +343,9 @@ class PhotoChecker:
             self._warn_missing_key_once()
             return None
 
-        content: List[dict[str, Any]] = []
-        if image_url:
-            content.append({"type": "image", "source": {"type": "url", "url": image_url}})
+        # 写真は投稿の順に先頭から max_photos 枚まで（1枚ごとに入力トークンが増えるため上限を設ける）
+        images = list(image_urls)[: self.max_photos]
+        content: List[dict[str, Any]] = [{"type": "image", "source": {"type": "url", "url": url}} for url in images]
         content.append({"type": "text", "text": prompt})
 
         try:
@@ -359,6 +366,12 @@ class PhotoChecker:
         if getattr(response, "stop_reason", None) == "refusal" or not isinstance(answer, answer_type):
             logger.warning(f"📷 {label} unavailable: no usable answer (stop_reason={response.stop_reason})")
             return None
+        # 費用の確認用（写真の枚数で入力トークンが変わる）
+        usage = getattr(response, "usage", None)
+        logger.info(
+            f"📷 {label} usage: images={len(images)} input_tokens={getattr(usage, 'input_tokens', None)} "
+            f"output_tokens={getattr(usage, 'output_tokens', None)}"
+        )
         return response
 
     @staticmethod
